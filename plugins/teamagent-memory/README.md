@@ -51,12 +51,12 @@ sessions and gates future tool calls.
 
 ## Install
 
-This plugin is bundled with the `teamagent-marketplace` marketplace at the
-repo root. From a Claude Code session:
+This plugin ships in the `matrix-plugin-memory` marketplace at the repo
+root. From a Claude Code session:
 
 ```
-/plugin marketplace add /path/to/teamagent-marketplace
-/plugin install teamagent-memory@teamagent-marketplace
+/plugin marketplace add libz-renlab-ai/Matrix-Plugin-memory
+/plugin install teamagent-memory@matrix-plugin-memory
 ```
 
 For local dev, point Claude Code at this worktree directly with

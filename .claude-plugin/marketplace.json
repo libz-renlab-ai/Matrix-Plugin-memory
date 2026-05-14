@@ -1,0 +1,26 @@
+{
+  "name": "matrix-plugin-memory",
+  "owner": {
+    "name": "libz-renlab-ai"
+  },
+  "description": "Matrix-Plugin-memory marketplace · TeamAgent: capture corrections in one Claude Code session, block repeats in the next.",
+  "homepage": "https://github.com/libz-renlab-ai/Matrix-Plugin-memory",
+  "version": "0.1.0",
+  "plugins": [
+    {
+      "name": "teamagent-memory",
+      "source": "./plugins/teamagent-memory",
+      "description": "Capture user corrections as rule cards in one session and block the same mistake from repeating in the next via PreToolUse, Stop, and UserPromptSubmit hooks.",
+      "version": "0.1.0",
+      "category": "memory",
+      "tags": [
+        "memory",
+        "hooks",
+        "rule-card",
+        "teambrain",
+        "correction-capture",
+        "pretooluse"
+      ]
+    }
+  ]
+}
