@@ -1,0 +1,18 @@
+{
+  "name": "teamagent-memory",
+  "description": "Capture corrections during Stop, store as rule cards, block repeats with PreToolUse and inject reminders with UserPromptSubmit.",
+  "version": "0.1.0",
+  "author": {
+    "name": "libz-renlab-ai"
+  },
+  "homepage": "https://github.com/libz-renlab-ai/TeamBrain",
+  "license": "MIT",
+  "keywords": [
+    "teamagent",
+    "memory",
+    "rules",
+    "hooks",
+    "claude-code",
+    "correction-capture"
+  ]
+}

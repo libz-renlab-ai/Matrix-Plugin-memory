@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# teamagent CLI — inspect rule cards and hook events captured by
+# teamagent-memory.
+#
+# Subcommands:
+#   list             cat rules.jsonl (one rule per line)
+#   events           tail events.jsonl (default last 50)
+#   clear --yes      truncate rules.jsonl and events.jsonl
+#   inspect <id>     pretty-print rule by id
+#   --version        print plugin version
+
+set -u
+
+VERSION="0.1.0"
+STORE_DIR="${HOME}/.teamagent"
+RULES_PATH="${STORE_DIR}/rules.jsonl"
+EVENTS_PATH="${STORE_DIR}/events.jsonl"
+
+usage() {
+  cat <<'EOF'
+teamagent — TeamAgent memory store CLI
+
+Usage:
+  teamagent list                 List all captured rule cards
+  teamagent events [N]           Show last N events (default 50)
+  teamagent inspect <rule_id>    Pretty-print a rule card by id
+  teamagent clear --yes          Truncate rules.jsonl and events.jsonl
+  teamagent --version            Print plugin version
+EOF
+}
+
+ensure_dir() {
+  mkdir -p "${STORE_DIR}" 2>/dev/null || true
+}
+
+cmd="${1:-}"
+case "${cmd}" in
+  --version|-v)
+    echo "teamagent-memory ${VERSION}"
+    ;;
+  list)
+    ensure_dir
+    if [ ! -s "${RULES_PATH}" ]; then
+      echo "(no rules captured yet; ${RULES_PATH} is empty)"
+      exit 0
+    fi
+    cat "${RULES_PATH}"
+    ;;
+  events)
+    ensure_dir
+    n="${2:-50}"
+    if [ ! -s "${EVENTS_PATH}" ]; then
+      echo "(no events logged yet; ${EVENTS_PATH} is empty)"
+      exit 0
+    fi
+    tail -n "${n}" "${EVENTS_PATH}"
+    ;;
+  inspect)
+    id="${2:-}"
+    if [ -z "${id}" ]; then
+      echo "teamagent inspect: missing rule_id" >&2
+      usage >&2
+      exit 2
+    fi
+    if [ ! -s "${RULES_PATH}" ]; then
+      echo "(no rules; ${RULES_PATH} is empty)"
+      exit 1
+    fi
+    if command -v jq >/dev/null 2>&1; then
+      jq -e --arg id "${id}" 'select(.id == $id)' "${RULES_PATH}" || {
+        echo "rule not found: ${id}" >&2
+        exit 1
+      }
+    else
+      grep -F "\"${id}\"" "${RULES_PATH}" || {
+        echo "rule not found: ${id}" >&2
+        exit 1
+      }
+    fi
+    ;;
+  clear)
+    if [ "${2:-}" != "--yes" ]; then
+      echo "teamagent clear refuses to run without --yes" >&2
+      exit 2
+    fi
+    ensure_dir
+    : > "${RULES_PATH}"
+    : > "${EVENTS_PATH}"
+    echo "cleared ${RULES_PATH} and ${EVENTS_PATH}"
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    echo "teamagent: unknown subcommand: ${cmd}" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
