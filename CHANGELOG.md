@@ -4,10 +4,37 @@ All notable changes to this marketplace and to `teamagent-memory` are recorded h
 This file follows the [Keep a Changelog](https://keepachangelog.com/) format;
 versions follow [SemVer](https://semver.org/).
 
-## [0.2.0-rc.1] — 2026-05-15
+## [0.2.0] — 2026-05-15
 
-The full M1–M3 closed loop. Major rewrite from v0.1's JSONL store to SQLite +
-semantic matching + override classification.
+The full M1–M5.a closed loop. Major rewrite from v0.1's JSONL store to SQLite
++ semantic matching + override classification + AGENTS.md compile.
+
+### Added — M5.a (compile to AGENTS.md)
+- `lib/compile.cjs` — render high-tier project rules into a managed block
+  in `<repo>/AGENTS.md`. Tiers `canonical`/`canonical+`, wilson ≥ 0.65,
+  cap 20 rules. BEGIN/END HTML-comment markers preserve all user-authored
+  content above and below the block.
+- Stop hook stage 4 — best-effort `compileFromDb` after extract+calibrate.
+  Repo root resolved via `TEAMAGENT_REPO_ROOT` env or `process.cwd()`.
+- New CLI: `teamagent compile [--repo PATH] [--dry-run]` for manual
+  invocation and previewing the block.
+- 13 new unit tests + 3 integration tests.
+
+### Added — M4 (semantic exceptions + auto-classify + project precedence)
+- `rule_exceptions.embedding BLOB` (schema v3, idempotent ALTER). CLI
+  `classify b --condition "..."` auto-embeds the condition.
+- `lib/match.ruleHasMatchingException` gains a third layer: cosine
+  exception match with threshold **0.82** (tuned from the draft's 0.78
+  after smoke caught e5-small's ~0.79–0.80 baseline for unrelated short
+  queries; see ADR-0012 and `docs/notes/M4-smoke-2026-05-15.md`).
+- `runMatch` now lazy-embeds via a thunk so fast-path-only matches don't
+  load the embedding model.
+- UserPromptSubmit `findUnhandledOverride` counts `override_prompt_injected`
+  events and auto-classifies as (a) `rule-wrong` at ≥3 prompts. Emits both
+  `override_classified {auto:true}` and `override_auto_classified`.
+- PreToolUse and UserPromptSubmit load `knowledge.db` before `global.db`
+  and skip global rules whose id collides — project always wins.
+- 3 new integration tests covering all three M4 paths.
 
 ### Added — M1 (basic SQLite + 4-tier interception)
 - Three SQLite stores: `<repo>/.teamagent/knowledge.db` (project),
@@ -73,6 +100,7 @@ semantic matching + override classification.
 ### Schema versions
 - **v1** — `rules`, `rule_exceptions`, `scan_cursor`, `events` tables (M1).
 - **v2** — ADD COLUMN `prior REAL` on `rules` (M2, idempotent).
+- **v3** — ADD COLUMN `embedding BLOB` on `rule_exceptions` (M4, idempotent).
 
 ### Architecture Decision Records
 - [ADR-0001](docs/adr/0001-embedding-model.md) e5-small default — exploration
@@ -86,15 +114,23 @@ semantic matching + override classification.
 - [ADR-0009](docs/adr/0009-no-migration.md) no v0.1 → v0.2 migration — accepted
 - [ADR-0010](docs/adr/0010-override-classification.md) 3-way override classification — accepted
 - [ADR-0011](docs/adr/0011-effective-wilson.md) effectiveWilson floor — accepted (M2)
+- [ADR-0012](docs/adr/0012-m4-decisions.md) M4: semantic exceptions, auto-classify, project precedence — accepted
+- [ADR-0013](docs/adr/0013-compile-agents-md.md) M5.a: compile to AGENTS.md — accepted
 
 ### Known limitations / Follow-ups
-- Exception matching is literal/token substring; semantic exception match
-  deferred to M4.
-- 3-turn auto-classify timeout (DESIGN §8.3) not yet implemented; an
-  override stays unhandled until user replies or `teamagent classify` runs.
+- AGENTS.md compile is project-scope only. Global rules continue to surface
+  only via the UserPromptSubmit hook; if a future ADR adds `~/AGENTS.md`
+  output, scope precedence will need its own decision.
+- AGENTS.md managed block includes a `Generated <iso>` line — every Stop
+  produces a one-line diff even when rule content is unchanged. Acceptable
+  for v0.2; could be hidden behind `TEAMAGENT_COMPILE_STABLE=1` in the
+  future.
 - Vitest worker pool occasionally segfaults on shutdown (cosmetic, exit 0).
 - Cold install in China requires `--registry=https://registry.npmmirror.com`
   for `@xenova/transformers` deps; see [INSTALL.md](INSTALL.md).
+
+### Tests
+- 147 passing (27 files) — M1: 90, M2: +23, M3: +13, M4: +5, M5.a: +16.
 
 ---
 

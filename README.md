@@ -20,11 +20,11 @@
 
 | Path | Purpose |
 |---|---|
-| [`plugins/teamagent-memory/`](plugins/teamagent-memory/) | The plugin (v0.2.0-rc.1) |
-| [`docs/DESIGN.md`](docs/DESIGN.md) | Full design — 740 lines, M1-M3 scope |
-| [`docs/adr/`](docs/adr/) | 11 architecture decision records |
-| [`docs/plans/`](docs/plans/) | M1 / M2 / M3 implementation plans (TDD task lists) |
-| [`docs/notes/`](docs/notes/) | M1 / M2 / M3 smoke results |
+| [`plugins/teamagent-memory/`](plugins/teamagent-memory/) | The plugin (v0.2.0) |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | Full design — 740 lines, M1-M5.a scope |
+| [`docs/adr/`](docs/adr/) | 13 architecture decision records |
+| [`docs/plans/`](docs/plans/) | M1 / M2 / M3 / M4 implementation plans (TDD task lists) |
+| [`docs/notes/`](docs/notes/) | M1 / M2 / M3 / M4 / M5.a smoke results |
 | [`CHANGELOG.md`](CHANGELOG.md) | Version history |
 | [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) | Marketplace manifest |
 

@@ -5,13 +5,13 @@
   },
   "description": "Matrix-Plugin-memory marketplace · TeamAgent: capture corrections (LLM-extracted) into SQLite, block repeats via fast-path + semantic (e5-small) + BM25; four-tier effectiveWilson interception.",
   "homepage": "https://github.com/libz-renlab-ai/Matrix-Plugin-memory",
-  "version": "0.2.0-rc.1",
+  "version": "0.2.0",
   "plugins": [
     {
       "name": "teamagent-memory",
       "source": "./plugins/teamagent-memory",
       "description": "Capture corrections as SQLite-backed rule cards (LLM-extracted), match via fast-path + semantic (e5-small) + BM25, four-tier interception with effectiveWilson + exponential decay.",
-      "version": "0.2.0-rc.1",
+      "version": "0.2.0",
       "category": "memory",
       "tags": [
         "memory",

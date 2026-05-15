@@ -11,7 +11,7 @@ const { readEvents } = require(path.join(HOOKS_LIB, "events.cjs"));
 const { applyEvent } = require(path.join(HOOKS_LIB, "confidence.cjs"));
 const { getSchemaVersion } = require(path.join(HOOKS_LIB, "schema.cjs"));
 
-const VERSION = "0.2.0-alpha.1";
+const VERSION = "0.2.0";
 
 function usage() {
   console.log(`teamagent — TeamAgent memory store CLI (v${VERSION})
