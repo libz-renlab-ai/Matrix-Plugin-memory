@@ -1,7 +1,7 @@
 {
   "name": "teamagent-memory",
   "description": "Capture corrections as SQLite-backed rule cards (LLM-extracted), match via fast-path + semantic (e5-small) + BM25, four-tier interception with effectiveWilson + exponential decay.",
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-rc.1",
   "author": {
     "name": "libz-renlab-ai"
   },
