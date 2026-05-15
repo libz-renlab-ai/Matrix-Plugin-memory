@@ -1,0 +1,20 @@
+{
+  "name": "teamagent-memory",
+  "private": true,
+  "version": "0.2.0-alpha.1",
+  "type": "commonjs",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint:hooks": "for f in hooks/*.cjs hooks/lib/*.cjs; do node --check \"$f\"; done"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
