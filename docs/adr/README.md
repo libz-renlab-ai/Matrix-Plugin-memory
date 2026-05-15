@@ -28,6 +28,7 @@ teamagent-memory 所有架构决策记录。一条决策 = 一份文件，编号
 | [0010](0010-override-classification.md) | override 分类反问机制 | accepted |
 | [0011](0011-effective-wilson.md) | effectiveWilson floor at prior until n>=5 | accepted |
 | [0012](0012-m4-decisions.md) | M4: semantic exceptions, 3-turn auto-classify, project precedence | accepted |
+| [0013](0013-compile-agents-md.md) | M5.a: compile high-tier project rules to AGENTS.md | accepted |
 
 ## 模板
 

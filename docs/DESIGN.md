@@ -22,7 +22,7 @@
 
 - ❌ 跨团队共享 / 同步（不引入网络协议）
 - ❌ 多 LLM provider 适配（仅 `claude -p`）
-- ❌ 编译规则反写 AGENTS.md（M5 stretch，先留 stub）
+- ✅ 编译规则反写 AGENTS.md（M5.a 已落地，见 ADR-0013：受控 block 写入 `<repo>/AGENTS.md`）
 - ❌ Web UI / dashboard（CLI + Skills 输出已足够）
 - ❌ JSONL → SQLite 迁移（v0.1 用户清空重来，见 ADR-009）
 
@@ -726,6 +726,7 @@ PostToolUse 每次写完 `posttool_*` 事件后，回看本 session 最近 5 个
 | [ADR-0010](adr/0010-override-classification.md) | override 分类反问机制 | accepted |
 | [ADR-0011](adr/0011-effective-wilson.md) | effectiveWilson floor at prior until n>=5 | accepted |
 | [ADR-0012](adr/0012-m4-decisions.md) | M4: semantic exceptions + 3-turn auto-classify + project precedence | accepted |
+| [ADR-0013](adr/0013-compile-agents-md.md) | M5.a: compile high-tier project rules to AGENTS.md | accepted |
 
 ---
 

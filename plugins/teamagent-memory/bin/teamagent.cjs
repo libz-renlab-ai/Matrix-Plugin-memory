@@ -29,6 +29,8 @@ Usage:
   teamagent gc [--dry-run]       trigger gc
   teamagent classify <event_id> <a|b|c> [--condition "..."]
                                  process an override reply (a=rule-wrong, b=context-specific, c=skip)
+  teamagent compile [--repo PATH] [--dry-run]
+                                 (re)write the managed TeamAgent block in <repo>/AGENTS.md
   teamagent --version
 `);
 }
@@ -235,6 +237,35 @@ function cmdClassify(args) {
   return 0;
 }
 
+function cmdCompile(args) {
+  let repo = null;
+  let dryRun = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--repo") repo = args[++i];
+    else if (args[i] === "--dry-run") dryRun = true;
+  }
+  repo = repo || process.env.TEAMAGENT_REPO_ROOT || process.cwd();
+  let knowledgeDb = null;
+  try { knowledgeDb = openKnowledgeDb(resolveProjectDbPath()); } catch (e) { console.error("cannot open knowledge.db: " + e.message); return 1; }
+  const { listRules: listProjectRules } = require(path.join(HOOKS_LIB, "rules.cjs"));
+  const { compileFromDb, pickRules, renderBlock } = require(path.join(HOOKS_LIB, "compile.cjs"));
+  if (dryRun) {
+    const all = listProjectRules(knowledgeDb, { scope: "project", limit: 1000 });
+    const picks = pickRules(all);
+    process.stdout.write(renderBlock(picks) + "\n");
+    closeDb(knowledgeDb);
+    return 0;
+  }
+  const res = compileFromDb(knowledgeDb, repo);
+  closeDb(knowledgeDb);
+  if (res.skipped) {
+    console.error("skipped: " + res.skipped);
+    return 1;
+  }
+  console.log(`${res.changed ? "updated" : "unchanged"} ${res.path} (${res.ruleCount} rules)`);
+  return 0;
+}
+
 function cmdGc(args) {
   const dryRun = args.includes("--dry-run");
   const dbs = bothDbs();
@@ -270,6 +301,7 @@ function main(argv) {
     case "forget": return cmdForget(rest);
     case "gc": return cmdGc(rest);
     case "classify": return cmdClassify(rest);
+    case "compile": return cmdCompile(rest);
     case undefined:
     case "":
     case "-h":
