@@ -724,6 +724,7 @@ PostToolUse 每次写完 `posttool_*` 事件后，回看本 session 最近 5 个
 | [ADR-0008](adr/0008-claude-p-timeout.md) | claude -p 超时 30s + 降级 | accepted |
 | [ADR-0009](adr/0009-no-migration.md) | v0.2 不做 JSONL → SQLite 迁移 | accepted |
 | [ADR-0010](adr/0010-override-classification.md) | override 分类反问机制 | accepted |
+| [ADR-0011](adr/0011-effective-wilson.md) | effectiveWilson floor at prior until n>=5 | accepted |
 
 ---
 
