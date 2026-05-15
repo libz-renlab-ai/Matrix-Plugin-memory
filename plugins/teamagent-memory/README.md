@@ -8,136 +8,142 @@
                        memory plugin: never repeat the same mistake twice
 ```
 
-# teamagent-memory
+# teamagent-memory (v0.2)
 
-Capture user corrections, store them as rule cards, then block the next
-session before it repeats the mistake.
+Capture user corrections, store them as SQLite rule cards (LLM-extracted),
+then block / warn / suggest / passively-remind the next session — driven by
+a Wilson-confidence-aware four-tier interception.
 
 ```
-   session 1            stored             session 2
-   ---------            ------             ---------
+   session 1                       stored                    session 2
+   ---------                       ------                    ---------
    Alice: npm install moment
    user:  "use dayjs instead"
        |
-       v Stop hook
-   stop-capture.cjs ---> rules.jsonl ---> PreToolUse hook
-                                              |
-                                              v
-                                       Bob: npm install moment  -> BLOCKED
-                                       reason: rule-...-moment-dayjs
+       v Stop hook (4-stage)
+   analyze -> claude -p extract -> calibrate -> compile
+                                     |
+                                     v
+                            knowledge.db / global.db
+                                     |
+                                     v PreToolUse hook
+                                                            Bob: npm install moment
+                                                                  -> BLOCKED (canonical+, 0.93)
+                                                                  reason: rule-...-moment-dayjs
 ```
 
-## Why
+## What's new in v0.2
 
-Claude Code teams hit the same advice over and over: "no, don't use moment",
-"use ripgrep not grep", "don't `kubectl apply -f -` on prod". Without
-persistent memory, every new session starts blank. `teamagent-memory`
-turns each correction into a structured rule that survives across
-sessions and gates future tool calls.
+- **SQLite three-store**:
+  - `<repo>/.teamagent/knowledge.db` — project rules
+  - `~/.teamagent/global.db` — cross-project rules
+  - `~/.teamagent/events.db` — full audit log
+- **Stop hook 4-stage pipeline**: analyze → extract (local `claude -p`) → calibrate (Wilson) → compile (stub).
+- **Four-tier interception**: block / warn / suggest / passive — driven by `candidate_score = sim × wilson_lower_bound`.
+- **Five hooks** wired: SessionStart (load + GC + decay), UserPromptSubmit, PreToolUse (Bash+Edit+Write), PostToolUse (record), Stop.
+- **New CLI**: list / inspect / events / mute / demote / promote / doctor / export / forget / gc / --version.
+- Full design: [`docs/DESIGN.md`](../../docs/DESIGN.md); decisions: [`docs/adr/`](../../docs/adr/).
 
-## Demo flow (8 steps)
+## Upgrading from v0.1
 
-1. Alice asks Claude to `npm install moment`.
-2. User corrects: "don't use moment, use dayjs".
-3. On `Stop`, `stop-capture.cjs` extracts the correction.
-4. A rule card is written to `~/.teamagent/rules.jsonl`:
-   `{ trigger, wrong, correct, why, confidence }`.
-5. Bob starts a new session and asks Claude to `npm install moment`.
-6. `pretooluse-enforce.cjs` reads rules, matches the command, and emits
-   `permissionDecision: "deny"` with the rule citation.
-7. The proof console shows: "saved 1 repeat mistake, rule confidence +1".
-8. CEO sees the evidence trail: transcript, rule card, hook event,
-   before/after diff.
+v0.2 does **not** auto-migrate `~/.teamagent/rules.jsonl` (see [ADR-0009](../../docs/adr/0009-no-migration.md)).
+SessionStart prints a one-line notice when it detects the old file. To preserve
+old rules, dump JSONL by hand and re-issue corrections in v0.2.
 
 ## Install
-
-This plugin ships in the `matrix-plugin-memory` marketplace at the repo
-root. From a Claude Code session:
 
 ```
 /plugin marketplace add libz-renlab-ai/Matrix-Plugin-memory
 /plugin install teamagent-memory@matrix-plugin-memory
 ```
 
-For local dev, point Claude Code at this worktree directly with
-`--plugin-dir` and the hooks load on next session start.
+For local dev: `--plugin-dir plugins/teamagent-memory`. After cloning the repo,
+**you must run `npm install --omit=dev`** inside the plugin directory once so
+better-sqlite3 prebuilt binaries are available to the hooks.
 
 ## File layout
 
 ```
 plugins/teamagent-memory/
-  .claude-plugin/plugin.json       plugin manifest
+  .claude-plugin/plugin.json
   skills/
-    capture-correction/SKILL.md    extract correction -> rule card
-    explain-rule-hit/SKILL.md      explain a PreToolUse deny
-    review-new-rules/SKILL.md      list recently-captured rules
+    capture-correction/SKILL.md    manual correction capture (v0.2 schema)
+    explain-rule-hit/SKILL.md      explain four-tier deny/ask
+    review-new-rules/SKILL.md      list rules from SQLite
+    rule-doctor/SKILL.md           self-diagnostics
   hooks/
-    hooks.json                     hook wiring
-    pretooluse-enforce.cjs         block matching Bash commands
-    stop-capture.cjs               write rule card on Stop
-    userprompt-inject.cjs          inject rule reminders on prompt
-  bin/teamagent                    CLI for list/events/inspect/clear
-  README.md                        this file
+    hooks.json                     5-hook wiring
+    sessionstart.cjs               GC + decay
+    userprompt-inject.cjs          fast-path reminder
+    pretooluse-enforce.cjs         4-tier (Bash|Edit|Write)
+    posttool-record.cjs            event log (override detect = M3)
+    stop-capture.cjs               4-stage pipeline
+    lib/
+      paths.cjs db.cjs schema.cjs rules.cjs events.cjs
+      confidence.cjs redos.cjs match.cjs
+      analyze.cjs extract.cjs log.cjs
+  bin/
+    teamagent                      bash wrapper
+    teamagent.cjs                  Node-backed CLI
+  test/                            vitest unit + integration
+  README.md
 ```
 
-## Hook contracts
+## Storage paths
 
-- **PreToolUse** (matcher `Bash`): reads `tool_input.command`, scans
-  `rules.jsonl`, on first regex/substring match emits a deny JSON to
-  stdout. Logs `pretooluse_block` or `pretooluse_pass` to
-  `events.jsonl`.
-- **Stop**: reads `transcript_path`, scans the last 40 messages for
-  correction patterns, writes deduped rule cards.
-- **UserPromptSubmit**: scans the user prompt for rule keywords and
-  injects an `additionalContext` reminder so the assistant proposes the
-  correct tool call instead of the wrong one.
+| Path | Content |
+|---|---|
+| `<repo>/.teamagent/knowledge.db` | Project rules (add to repo `.gitignore`) |
+| `~/.teamagent/global.db` | Cross-project rules |
+| `~/.teamagent/events.db` | Hook events + decisions |
 
-All three hooks read JSON from stdin, write JSON to stdout, and exit 0
-even on bad input. The user's session is never broken by a hook error.
+All three are SQLite (WAL). Mode 0600 (set on first open where supported).
 
-## Storage
+## Four tiers
 
-- Rules: `~/.teamagent/rules.jsonl` (JSONL, one rule per line)
-- Events: `~/.teamagent/events.jsonl` (audit trail of hook decisions)
+| Tier | score range | UI |
+|---|---|---|
+| block | ≥ 0.85 | `deny` with rule citation |
+| warn  | 0.65 – 0.85 | `deny` + retry hint |
+| suggest | 0.45 – 0.65 | `ask` + alternative |
+| passive | 0.25 – 0.45 | reminder via next UserPromptSubmit |
+| pass    | < 0.25 | silent |
 
-Schema for one rule:
-
-```json
-{
-  "id": "rule-2026-05-13-moment-dayjs",
-  "trigger": {"tool": "Bash", "pattern": "npm install\\s+moment"},
-  "wrong": "Adopting moment (per user correction)",
-  "correct": "Use dayjs",
-  "why": "Captured from user correction in transcript",
-  "confidence": 1,
-  "captured_at": "2026-05-13T00:00:00Z",
-  "session_origin": null,
-  "evidence": {"transcript_path": null, "hook_event_id": null}
-}
-```
+`score = sim × wilson_lower_bound`. Experimental rules (wilson ≈ 0.5) cap at
+`suggest` until they accumulate hits.
 
 ## CLI
 
 ```
-teamagent list                 list all rule cards
-teamagent events [N]           tail N events (default 50)
-teamagent inspect <rule_id>    pretty-print a single rule
-teamagent clear --yes          truncate rules and events
-teamagent --version            print plugin version
+teamagent list [--tier T] [--scope project|global]
+teamagent inspect <id>
+teamagent events [N] [--rule R]
+teamagent mute <id>            # archive
+teamagent demote <id>          # misses += 1, recompute Wilson, maybe demote tier
+teamagent promote <id>         # hits += 1
+teamagent doctor               # 3-DB self-check
+teamagent export [--rule id]   # JSON dump
+teamagent forget --rule <id>   # physical delete
+teamagent gc [--dry-run]       # archive stale experimentals
+teamagent --version
 ```
+
+On Windows PowerShell, prefer `node bin/teamagent.cjs ...` (bash shebang may not resolve).
 
 ## Troubleshooting
 
-- Hook not firing: check `claude --debug` output for hook discovery.
-  `hooks.json` must use `${CLAUDE_PLUGIN_ROOT}` (not `$CLAUDE_PLUGIN_ROOT`)
-  so the path is expanded by Claude Code's hook loader.
-- All commands blocked: a rule pattern is probably too greedy. Inspect with
-  `teamagent list` and edit `~/.teamagent/rules.jsonl` directly.
-- No rules captured after correction: only the last 40 messages of the
-  transcript are scanned; older corrections are ignored on purpose. Run
-  the correction again on a fresh session, or write the card manually.
-- `node --check`: every `.cjs` in `hooks/` must pass. Run from this
-  directory: `for f in hooks/*.cjs; do node --check "$f"; done`.
+- **Hook not firing**: `claude --debug` to see hook discovery. `${CLAUDE_PLUGIN_ROOT}` (not `$`) in hooks.json.
+- **better-sqlite3 not found**: `cd plugins/teamagent-memory && npm install --omit=dev`.
+- **`teamagent doctor` reports ERROR**: schema mismatch or permissions — archive the affected DB file and let SessionStart recreate.
+- **All commands blocked**: a rule's `match_regex` is too greedy. `teamagent demote <id>` or edit via SQLite directly.
+
+## Testing
+
+```
+cd plugins/teamagent-memory
+npm install
+npm test          # vitest, 90 tests
+```
 
 ## License
 

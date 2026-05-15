@@ -1,110 +1,83 @@
 ---
 name: capture-correction
-description: Use when the user issues a correction or "no, use X instead" style guidance. Extracts trigger/wrong/correct/why and stores as a rule card in ~/.teamagent/rules.jsonl.
+description: Use when the user issues a correction or "no, use X instead" style guidance. In v0.2, the Stop hook auto-extracts via local `claude -p`; invoke this skill only for manual capture outside that flow.
 ---
 
-```
-      user says "no, use X"
-              |
-              v
-   +----------------------+
-   |  extract correction  |    wrong / correct / why
-   +----------+-----------+
-              |
-              v
-   +----------------------+
-   |  dedupe by pattern   |    case-insensitive on trigger.pattern
-   +----------+-----------+
-              |
-              v
-   +----------------------+
-   |  write rule card     |    append JSON line to rules.jsonl
-   +----------------------+
-```
+# capture-correction (v0.2)
 
-# capture-correction
+Capture a user correction as a TeamAgent rule card.
 
-Capture a single user correction as a TeamAgent rule card so that future
-Claude Code sessions cannot quietly repeat the same mistake.
+> **v0.2 change:** The Stop hook now uses local `claude -p` headless to extract
+> structured rules from candidate moments (`hooks/stop-capture.cjs` → 4-stage
+> pipeline: analyze → extract → calibrate → compile). The 6 regex patterns from
+> v0.1 are gone. Invoke this skill **manually** when:
+> - the user pastes a correction outside an active code task
+> - the user explicitly asks to "remember this rule"
+> - the Stop pipeline missed something obvious and the user wants it in now
 
-## When to use
+## When to use (manual)
 
-Invoke this skill when the user message contains any of:
-
-- "don't use X, use Y"
-- "use Y instead of X"
-- "not X, use Y"
+- "remember: don't use moment, use dayjs"
+- "save this rule: never `kubectl apply -f -` on prod"
 - "X 不要，用 Y"
-- "不要用 X，用 Y"
 - "用 Y 替代 X"
 
-The Stop hook (`stop-capture.cjs`) already runs these patterns automatically.
-Invoke this skill manually when the user pastes a correction outside of a
-code task, or asks the assistant to "remember this rule".
+## What to write (v0.2 schema)
 
-## What to write
-
-Each rule card is one JSON object on one line in
-`~/.teamagent/rules.jsonl`. Schema (per BRIEF.md):
-
-```json
-{
-  "id": "rule-YYYY-MM-DD-<wrong-slug>-<correct-slug>",
-  "trigger": {"tool": "Bash", "pattern": "<regex or substring>"},
-  "wrong": "Adopting <wrong> (per user correction)",
-  "correct": "Use <correct>",
-  "why": "<one-sentence rationale>",
-  "confidence": 1,
-  "captured_at": "<ISO8601>",
-  "session_origin": "<session_id or null>",
-  "evidence": {
-    "transcript_path": "<path or null>",
-    "hook_event_id": "<id or null>",
-    "source_text": "<<= 400 chars of the user message>"
-  }
-}
-```
-
-## Idempotency rules
-
-1. Compare `trigger.pattern` case-insensitively against existing rules.
-2. If a rule with the same pattern already exists, **do not append**. Instead
-   read the file, bump `confidence += 1`, set `last_seen_at` to the current
-   ISO timestamp, and rewrite the file.
-3. Never duplicate a card on identical pattern, even if `wrong` / `correct`
-   text wording differs slightly.
-
-## Confidence increment
-
-- New rule: `confidence: 1`.
-- Same pattern observed again: increment by exactly 1.
-- The `teamagent-proof-console` plugin counts these increments as
-  "saved repeat mistakes".
-
-## Pattern construction
-
-If `wrong` is a simple npm-style package name (matches
-`[a-z0-9._@/-]+`), build the pattern as:
+Rules live in `~/.teamagent/global.db` or `<repo>/.teamagent/knowledge.db`
+(SQLite, not JSONL). One row per rule. Required columns:
 
 ```
-npm install\s+<escaped-name>
+id           rule-YYYY-MM-DD-<wrong-slug>-<correct-slug>
+scope        'project' | 'global'
+tier         'experimental'   ← always start here for manual capture
+wrong        one-sentence wrong action
+correct      one-sentence correct action
+why          one-sentence rationale
+match_regex  optional fast-path regex (lint via lib/redos before insert)
+match_literals  optional JSON array of substrings
+match_tools  JSON array; defaults to ["Bash"]; include "Edit"/"Write" if code-level
+embed_text   "wrong. correct. why" (required, will be embedded in M2)
+hits=0, misses=0, exceptions=0
+wilson_lower  0.5 (or 0.55/0.6 if confidence_hint suggests higher prior)
+captured_at  ISO 8601
+session_origin  session id if available
+source_text  ≤ 800 chars of the user's exact message
+evidence_json  { transcript_path, turn_index } if available
 ```
 
-Otherwise, escape regex metacharacters in the raw token and use that.
-This keeps the trigger keyed on the bash command the assistant is most
-likely to run next.
+Use `bin/teamagent.cjs` style helpers from `hooks/lib/rules.cjs` (`insertRule`)
+rather than hand-crafting INSERTs.
+
+## Idempotency
+
+The Stop pipeline dedups by hash of `(transcript_path, turn_index)`. For
+manual capture, dedupe by recomputed `id`:
+
+```
+rule-YYYY-MM-DD-<slug(wrong)>-<slug(correct)>
+```
+
+If `getRule(db, id)` returns a row, apply `applyEvent(rule, { kind: 'hit', at: now })`
+and `updateRule` instead of inserting a duplicate.
+
+## Confidence
+
+- New manual rule: `wilson_lower = 0.5`, `tier = 'experimental'`
+- Existing rule re-captured: bump via `applyEvent(... 'hit' ...)` — does the
+  Wilson math and tier promotion correctly
+
+## Match-pattern construction
+
+For npm-style packages: `(npm|pnpm|yarn)\s+(install|add)\s+<name>`. Always lint
+via `lib/redos.cjs::lintRegex` before storing — reject any regex flagged unsafe.
 
 ## What NOT to do
 
-- Do not write rule cards for sarcastic or hypothetical corrections.
-- Do not write rule cards that block an entire tool (e.g. all of `Bash`).
-- Do not delete or rewrite existing rules from this skill — use
-  `teamagent clear --yes` or edit `rules.jsonl` manually.
-- Do not store secrets or credentials in `wrong` / `correct` / `why`.
+- Don't store credentials, emails, absolute paths in `source_text` (DESIGN §10)
+- Don't write a rule with `match_regex` covering an entire tool (e.g. catch-all `.*`)
+- Don't bypass `applyEvent` when bumping confidence — manual increments skew Wilson
 
-## Where rules go
+## Inspect what you wrote
 
-- Path: `~/.teamagent/rules.jsonl`
-- Format: JSONL (one object per line)
-- Created on first capture by `stop-capture.cjs` if missing
-- Inspect via: `teamagent list` (CLI in `plugins/teamagent-memory/bin/`)
+`teamagent list` or `teamagent inspect <id>`.

@@ -1,7 +1,7 @@
 {
   "name": "teamagent-memory",
-  "description": "Capture corrections during Stop, store as rule cards, block repeats with PreToolUse and inject reminders with UserPromptSubmit.",
-  "version": "0.1.0",
+  "description": "Capture corrections as SQLite-backed rule cards (LLM-extracted), match via fast-path, four-tier interception with Wilson confidence + exponential decay.",
+  "version": "0.2.0-alpha.1",
   "author": {
     "name": "libz-renlab-ai"
   },
@@ -13,6 +13,9 @@
     "rules",
     "hooks",
     "claude-code",
-    "correction-capture"
+    "correction-capture",
+    "sqlite",
+    "wilson",
+    "four-tier"
   ]
 }

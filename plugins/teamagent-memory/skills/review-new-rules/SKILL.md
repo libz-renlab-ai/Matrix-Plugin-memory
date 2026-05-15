@@ -1,31 +1,12 @@
 ---
 name: review-new-rules
-description: Use when the user asks "what rules did we capture" or "review new rules". Lists recently-captured rule cards with trigger/wrong/correct/confidence/captured_at.
+description: Use when the user asks "what rules did we capture" or "show recent rules". Lists rules from SQLite sorted by Wilson lower bound, with tier and hits/misses.
 ---
 
-```
-   user asks "what did we learn?"
-              |
-              v
-   +----------------------+
-   | read rules.jsonl     |
-   +----------+-----------+
-              |
-              v
-   +----------------------+
-   | sort by captured_at  |   newest first
-   +----------+-----------+
-              |
-              v
-   +----------------------+
-   | render compact table |   id / wrong / correct / conf / when
-   +----------------------+
-```
+# review-new-rules (v0.2)
 
-# review-new-rules
-
-Show the user what TeamAgent has captured during recent sessions. This is the
-"so what did we actually save?" view that the proof console links into.
+Show the user what TeamAgent has captured. Source-of-truth changed from
+JSONL to SQLite three-store.
 
 ## When to use
 
@@ -36,50 +17,48 @@ Show the user what TeamAgent has captured during recent sessions. This is the
 
 ## How to read
 
-1. Source of truth: `~/.teamagent/rules.jsonl`.
-2. Prefer the CLI: `teamagent list`. If running inline, also accept the raw
-   file directly.
-3. Treat each line as an independent JSON object — never assume the file
-   parses as a single JSON array.
+1. Source of truth: `~/.teamagent/global.db` (cross-project) and
+   `<repo>/.teamagent/knowledge.db` (project).
+2. Prefer the CLI: `teamagent list` (auto-merges both DBs, sorted by
+   `wilson_lower DESC`, archived hidden by default).
+3. To filter by tier: `teamagent list --tier canonical+`.
+4. To filter by scope: `teamagent list --scope global`.
 
 ## How to render
 
-Render a compact table sorted by `captured_at` descending (newest first).
-Columns:
+Sort by `wilson_lower DESC, captured_at DESC`. Columns:
 
-- `id` — rule id, truncate to 40 chars
-- `wrong` — the wrong pattern, one line
-- `correct` — the recommended replacement, one line
-- `confidence` — integer
-- `captured_at` — ISO date (YYYY-MM-DD)
+- `id` (truncate 40)
+- `tier` — experimental | canonical | canonical+ | archived (archived hidden by default)
+- `wilson_lower` — 2 decimals
+- `hits/misses`
+- `wrong` — one line
 
-Example output:
+Example:
 
 ```
-rule-2026-05-13-moment-dayjs  | moment  | dayjs   | 2 | 2026-05-13
-rule-2026-05-12-axios-fetch   | axios   | fetch   | 1 | 2026-05-12
+rule-2026-05-13-moment-dayjs   canonical+  0.93   24/0  Adopting moment
+rule-2026-05-12-axios-fetch    canonical   0.78   10/1  Adopting axios for fetch
+rule-2026-05-15-foo-bar        experimental 0.50   0/0  Adopting foo
 ```
 
-If there are more than 20 rules, show the top 20 by recency and add a
-"... N more" line at the bottom.
+Show top 20 by score; "... N more" if longer.
 
 ## Empty state
 
-If `~/.teamagent/rules.jsonl` does not exist or is empty, reply with one
-sentence: "No rules captured yet. The Stop hook will record corrections
-the next time you tell Claude 'use X instead of Y'."
+If both DBs return no rows, reply: "No rules captured yet. The Stop hook
+will record corrections the next time you tell Claude 'use X instead of Y'."
 
 ## What this skill does NOT do
 
-- Does not modify or delete rules.
-- Does not call any hook directly.
-- Does not summarize across rules (no "themes" or "categories"); use the
-  proof console plugin for that.
+- Does not modify, archive, demote, or delete rules
+- Does not call any hook directly
+- Does not summarize across rules (no themes/categories)
 
 ## Pairing
 
-After listing rules, the assistant may suggest running:
+After listing rules:
 
-- `teamagent events` to see hook events
-- `/proof` (provided by `teamagent-proof-console`) to bundle evidence for
-  the CEO summary
+- `teamagent events` — see recent hook events / decisions
+- `teamagent inspect <id>` — full rule detail (JSON)
+- `teamagent gc --dry-run` — preview what GC would archive
