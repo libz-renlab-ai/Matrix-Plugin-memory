@@ -68,15 +68,19 @@ async function main() {
   try { globalDb = openKnowledgeDb(resolveGlobalDbPath()); } catch (_e) {}
   try { eventsDb = openEventsDb(resolveEventsDbPath()); } catch (_e) {}
 
+  // Project rules take precedence on id collision (ADR-0012).
+  const seen = new Set();
   const rules = [];
   if (knowledgeDb) {
     for (const r of listRules(knowledgeDb)) {
       try { r._exceptions = listExceptions(knowledgeDb, r.id); } catch (_e) { r._exceptions = []; }
+      seen.add(r.id);
       rules.push(r);
     }
   }
   if (globalDb) {
     for (const r of listRules(globalDb)) {
+      if (seen.has(r.id)) continue; // project wins
       try { r._exceptions = listExceptions(globalDb, r.id); } catch (_e) { r._exceptions = []; }
       rules.push(r);
     }

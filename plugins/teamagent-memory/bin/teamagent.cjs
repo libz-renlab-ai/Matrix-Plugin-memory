@@ -209,10 +209,21 @@ function cmdClassify(args) {
     console.log(`classified as rule-wrong; demoted to tier=${next.tier} wilson=${next.wilson_lower.toFixed(2)}`);
   } else if (choice === "b") {
     if (!condition) { console.error("classify b: --condition required"); closeDb(ev); closeAll(dbs); return 2; }
-    addException(found.db, { parent_rule_id: ruleId, condition, example: null });
-    ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
-      .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "context_specific", condition }));
-    console.log(`classified as context-specific; exception saved: "${condition}"`);
+    // Embed the condition synchronously-style (await in async wrapper).
+    return (async () => {
+      let embedding = null;
+      try {
+        const { embedText, packEmbedding } = require(path.join(HOOKS_LIB, "embed.cjs"));
+        const vec = await embedText(condition);
+        embedding = packEmbedding(vec);
+      } catch (_e) { /* fall through with embedding=null; literal substring still works */ }
+      addException(found.db, { parent_rule_id: ruleId, condition, example: null, embedding });
+      ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
+        .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "context_specific", condition, embedded: !!embedding }));
+      console.log(`classified as context-specific; exception saved: "${condition}"${embedding ? " (embedded)" : ""}`);
+      closeDb(ev); closeAll(dbs);
+      return 0;
+    })();
   } else if (choice === "c") {
     ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
       .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "skip" }));
@@ -270,4 +281,7 @@ function main(argv) {
   }
 }
 
-process.exit(main(process.argv.slice(2)));
+Promise.resolve(main(process.argv.slice(2))).then(code => process.exit(code || 0)).catch(err => {
+  console.error(err && err.message ? err.message : err);
+  process.exit(1);
+});

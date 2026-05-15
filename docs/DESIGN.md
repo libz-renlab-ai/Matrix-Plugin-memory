@@ -725,6 +725,7 @@ PostToolUse 每次写完 `posttool_*` 事件后，回看本 session 最近 5 个
 | [ADR-0009](adr/0009-no-migration.md) | v0.2 不做 JSONL → SQLite 迁移 | accepted |
 | [ADR-0010](adr/0010-override-classification.md) | override 分类反问机制 | accepted |
 | [ADR-0011](adr/0011-effective-wilson.md) | effectiveWilson floor at prior until n>=5 | accepted |
+| [ADR-0012](adr/0012-m4-decisions.md) | M4: semantic exceptions + 3-turn auto-classify + project precedence | accepted |
 
 ---
 

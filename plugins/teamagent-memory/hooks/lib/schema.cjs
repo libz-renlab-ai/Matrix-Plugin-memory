@@ -90,9 +90,18 @@ function applyKnowledgeSchemaV2(db) {
   db.prepare("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (2, ?)").run(nowIso());
 }
 
+// v3: add `embedding` BLOB to rule_exceptions for semantic exception matching (ADR-0012).
+function applyKnowledgeSchemaV3(db) {
+  const v = getSchemaVersion(db);
+  if (v >= 3) return;
+  try { db.exec(`ALTER TABLE rule_exceptions ADD COLUMN embedding BLOB`); } catch (_e) { /* already present */ }
+  db.prepare("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (3, ?)").run(nowIso());
+}
+
 function applyKnowledgeSchema(db) {
   applyKnowledgeSchemaV1(db);
   applyKnowledgeSchemaV2(db);
+  applyKnowledgeSchemaV3(db);
 }
 
 function applyEventsSchemaV1(db) {
@@ -113,6 +122,7 @@ function getSchemaVersion(db) {
 module.exports = {
   applyKnowledgeSchemaV1,
   applyKnowledgeSchemaV2,
+  applyKnowledgeSchemaV3,
   applyKnowledgeSchema,
   applyEventsSchemaV1,
   getSchemaVersion,

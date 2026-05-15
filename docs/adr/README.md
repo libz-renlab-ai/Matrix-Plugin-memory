@@ -27,6 +27,7 @@ teamagent-memory 所有架构决策记录。一条决策 = 一份文件，编号
 | [0009](0009-no-migration.md) | 不迁移 v0.1 JSONL 数据 | accepted |
 | [0010](0010-override-classification.md) | override 分类反问机制 | accepted |
 | [0011](0011-effective-wilson.md) | effectiveWilson floor at prior until n>=5 | accepted |
+| [0012](0012-m4-decisions.md) | M4: semantic exceptions, 3-turn auto-classify, project precedence | accepted |
 
 ## 模板
 
