@@ -1,0 +1,24 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-hooks:
+    name: node --check hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: node --check
+        working-directory: plugins/teamagent-memory
+        run: |
+          set -e
+          for f in hooks/*.cjs hooks/lib/*.cjs bin/teamagent.cjs; do
+            node --check "$f"
+          done

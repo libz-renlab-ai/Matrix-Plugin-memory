@@ -1,0 +1,51 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: vitest (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: plugins/teamagent-memory/package-lock.json
+
+      - name: Cache HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          # Bump key when we change the embedding model.
+          key: hf-multilingual-e5-small-v1
+          restore-keys: |
+            hf-multilingual-e5-small-
+
+      - name: Install dependencies
+        working-directory: plugins/teamagent-memory
+        run: npm ci --no-audit --no-fund
+
+      - name: Syntax-check all .cjs hooks
+        working-directory: plugins/teamagent-memory
+        run: |
+          for f in hooks/*.cjs hooks/lib/*.cjs bin/teamagent.cjs; do
+            node --check "$f"
+          done
+
+      - name: Run vitest
+        working-directory: plugins/teamagent-memory
+        env:
+          # Avoid hangs in CI if the embed model download stalls.
+          VITEST_POOL_TIMEOUT_MS: "180000"
+        run: npx vitest run --reporter=default
