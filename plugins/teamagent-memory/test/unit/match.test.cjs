@@ -1,4 +1,4 @@
-const { fastPathMatch, runMatch } = require("../../hooks/lib/match.cjs");
+const { fastPathMatch, runMatch, runMatchSync } = require("../../hooks/lib/match.cjs");
 
 const ruleRegex = { id: "r1", match_regex: "(npm|pnpm|yarn)\\s+(install|add)\\s+moment", match_literals: null };
 const ruleLit = { id: "r2", match_regex: null, match_literals: ["axios", "fetch"] };
@@ -24,17 +24,24 @@ describe("fastPathMatch", () => {
   });
 });
 
-describe("runMatch (M1 — fast-path only)", () => {
+describe("runMatchSync (M1 back-compat — fast-path only)", () => {
   it("returns first hit from rules in order", () => {
-    const out = runMatch("npm install moment", [ruleRegex, ruleLit]);
+    const out = runMatchSync("npm install moment", [ruleRegex, ruleLit]);
     expect(out.length).toBeGreaterThanOrEqual(1);
     expect(out[0].rule.id).toBe("r1");
     expect(out[0].sim).toBe(1.0);
   });
   it("returns empty when nothing matches", () => {
-    expect(runMatch("uhh", [ruleRegex])).toEqual([]);
+    expect(runMatchSync("uhh", [ruleRegex])).toEqual([]);
   });
   it("empty rules array returns empty", () => {
-    expect(runMatch("xxx", [])).toEqual([]);
+    expect(runMatchSync("xxx", [])).toEqual([]);
   });
+});
+
+describe("runMatch async — fast-path bypasses embedding", () => {
+  it("layer 1 hit returns immediately (no embed needed)", async () => {
+    const out = await runMatch("npm install moment", [ruleRegex]);
+    expect(out[0].layer).toBe(1);
+  }, 5000);
 });
