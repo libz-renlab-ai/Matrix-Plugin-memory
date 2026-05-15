@@ -81,6 +81,20 @@ function applyKnowledgeSchemaV1(db) {
   if (v < 1) db.prepare("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (1, ?)").run(nowIso());
 }
 
+// v2: add `prior` column to rules for effectiveWilson floor (ADR-0011).
+function applyKnowledgeSchemaV2(db) {
+  const v = getSchemaVersion(db);
+  if (v >= 2) return;
+  // ALTER TABLE may fail if column already exists (clean v1 + retry). Swallow.
+  try { db.exec(`ALTER TABLE rules ADD COLUMN prior REAL`); } catch (_e) { /* already present */ }
+  db.prepare("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (2, ?)").run(nowIso());
+}
+
+function applyKnowledgeSchema(db) {
+  applyKnowledgeSchemaV1(db);
+  applyKnowledgeSchemaV2(db);
+}
+
 function applyEventsSchemaV1(db) {
   db.exec(EVENTS_DDL_V1);
   const v = getSchemaVersion(db);
@@ -96,4 +110,10 @@ function getSchemaVersion(db) {
   }
 }
 
-module.exports = { applyKnowledgeSchemaV1, applyEventsSchemaV1, getSchemaVersion };
+module.exports = {
+  applyKnowledgeSchemaV1,
+  applyKnowledgeSchemaV2,
+  applyKnowledgeSchema,
+  applyEventsSchemaV1,
+  getSchemaVersion,
+};

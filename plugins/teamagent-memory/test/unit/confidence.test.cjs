@@ -1,4 +1,4 @@
-const { wilsonLowerBound, decay, computeTier, applyEvent } = require("../../hooks/lib/confidence.cjs");
+const { wilsonLowerBound, decay, computeTier, applyEvent, effectiveWilson, PRIOR_FLOOR_N } = require("../../hooks/lib/confidence.cjs");
 
 describe("wilsonLowerBound", () => {
   it("n=0 returns prior 0.5", () => {
@@ -49,6 +49,21 @@ describe("computeTier", () => {
   });
   it("experimental archives at misses >= 3", () => {
     expect(computeTier({ tier: "experimental", hits: 1, misses: 3, wilson_lower: 0.2 })).toBe("archived");
+  });
+});
+
+describe("effectiveWilson (M2 fix, ADR-0011)", () => {
+  it("returns max(wilson, prior) when n < 5 (M1 finding fix)", () => {
+    expect(effectiveWilson({ hits: 1, misses: 0, wilson_lower: 0.21, prior: 0.6 })).toBeCloseTo(0.6);
+  });
+  it("returns pure wilson when n >= 5", () => {
+    expect(effectiveWilson({ hits: 5, misses: 0, wilson_lower: 0.57, prior: 0.6 })).toBeCloseTo(0.57);
+  });
+  it("defaults prior to 0.5 if missing", () => {
+    expect(effectiveWilson({ hits: 0, misses: 0, wilson_lower: 0.5 })).toBeCloseTo(0.5);
+  });
+  it("PRIOR_FLOOR_N is 5", () => {
+    expect(PRIOR_FLOOR_N).toBe(5);
   });
 });
 

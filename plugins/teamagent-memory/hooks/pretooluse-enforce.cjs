@@ -7,6 +7,7 @@ const { resolveProjectDbPath, resolveGlobalDbPath, resolveEventsDbPath } = requi
 const { openKnowledgeDb, openEventsDb, closeDb } = require("./lib/db.cjs");
 const { listRules } = require("./lib/rules.cjs");
 const { runMatch } = require("./lib/match.cjs");
+const { effectiveWilson } = require("./lib/confidence.cjs");
 const { logHook } = require("./lib/log.cjs");
 
 const THRESH = { block: 0.85, warn: 0.65, suggest: 0.45, passive: 0.25 };
@@ -52,7 +53,7 @@ function buildReason(rule, decision, sim, wilson, score) {
   return lines.join("\n");
 }
 
-function main() {
+async function main() {
   const ev = safeParse(readStdinSync()) || {};
   const toolName = ev.tool_name || (ev.tool && ev.tool.name);
   const toolInput = ev.tool_input || (ev.tool && ev.tool.input) || {};
@@ -72,13 +73,13 @@ function main() {
   if (globalDb) rules.push(...listRules(globalDb));
   const eligible = rules.filter(r => Array.isArray(r.match_tools) && r.match_tools.includes(toolName));
 
-  const matches = runMatch(query, eligible);
+  const matches = await runMatch(query, eligible);
   let best = null;
   for (const m of matches) {
     const sim = m.sim;
-    const wilson = typeof m.rule.wilson_lower === "number" ? m.rule.wilson_lower : 0.5;
+    const wilson = effectiveWilson(m.rule);
     const score = sim * wilson;
-    if (!best || score > best.score) best = { rule: m.rule, sim, wilson, score };
+    if (!best || score > best.score) best = { rule: m.rule, sim, wilson, score, layer: m.layer };
   }
 
   const decision = best ? decisionFor(best.score) : "pass";
@@ -90,7 +91,7 @@ function main() {
     tool_name: toolName,
     decision,
     score: best ? best.score : 0,
-    payload: { command: query.slice(0, 500) },
+    payload: { command: query.slice(0, 500), layer: best ? best.layer : null },
   });
 
   for (const db of [knowledgeDb, globalDb, eventsDb]) closeDb(db);
@@ -108,7 +109,7 @@ function main() {
   process.exit(0);
 }
 
-try { main(); } catch (err) {
+main().catch(err => {
   try { process.stderr.write("teamagent pretooluse error: " + (err && err.message) + "\n"); } catch (_e) {}
   process.exit(0);
-}
+});

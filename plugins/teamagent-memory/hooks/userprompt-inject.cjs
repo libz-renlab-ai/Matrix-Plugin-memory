@@ -23,7 +23,7 @@ function extractPrompt(ev) {
   return "";
 }
 
-function main() {
+async function main() {
   const ev = safeParse(readStdinSync()) || {};
   const session_id = ev.session_id || null;
   const prompt = extractPrompt(ev);
@@ -38,7 +38,7 @@ function main() {
   if (knowledgeDb) rules.push(...listRules(knowledgeDb));
   if (globalDb) rules.push(...listRules(globalDb));
 
-  const hits = runMatch(prompt, rules);
+  const hits = await runMatch(prompt, rules);
   logHook(eventsDb, "UserPromptSubmit", {
     kind: "prompt_match",
     session_id,
@@ -64,7 +64,7 @@ function main() {
   process.exit(0);
 }
 
-try { main(); } catch (err) {
+main().catch(err => {
   try { process.stderr.write("teamagent userprompt-inject error: " + (err && err.message) + "\n"); } catch (_e) {}
   process.exit(0);
-}
+});

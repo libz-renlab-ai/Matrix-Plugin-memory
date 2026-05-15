@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const Database = require("better-sqlite3");
-const { applyKnowledgeSchemaV1, applyEventsSchemaV1 } = require("./schema.cjs");
+const { applyKnowledgeSchema, applyEventsSchemaV1 } = require("./schema.cjs");
 
 function ensureParentDir(filePath) {
   const dir = path.dirname(filePath);
@@ -16,7 +16,7 @@ function openKnowledgeDb(filePath) {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
-  applyKnowledgeSchemaV1(db);
+  applyKnowledgeSchema(db);
   return db;
 }
 

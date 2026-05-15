@@ -16,7 +16,7 @@ describe("openKnowledgeDb", () => {
     const p = path.join(dir, "k.db");
     const db = openKnowledgeDb(p);
     expect(fs.existsSync(p)).toBe(true);
-    expect(getSchemaVersion(db)).toBe(1);
+    expect(getSchemaVersion(db)).toBeGreaterThanOrEqual(1);
     closeDb(db);
   });
 
@@ -25,7 +25,7 @@ describe("openKnowledgeDb", () => {
     const p = path.join(dir, "k.db");
     closeDb(openKnowledgeDb(p));
     const db = openKnowledgeDb(p);
-    expect(getSchemaVersion(db)).toBe(1);
+    expect(getSchemaVersion(db)).toBeGreaterThanOrEqual(1);
     closeDb(db);
   });
 

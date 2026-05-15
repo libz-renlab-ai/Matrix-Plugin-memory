@@ -23,19 +23,22 @@ function deserializeArrays(row) {
 
 function insertRule(db, rule) {
   const r = serializeArrays(rule);
+  // prior defaults to the wilson_lower at insert time (the prior we chose).
+  const wilson_lower = typeof r.wilson_lower === "number" ? r.wilson_lower : 0.5;
+  const prior = typeof r.prior === "number" ? r.prior : wilson_lower;
   db.prepare(`
     INSERT INTO rules (
       id, scope, tier, wrong, correct, why,
       match_regex, match_literals, match_tools, match_scope_globs,
       embedding, embed_model, embed_text,
-      hits, misses, exceptions, wilson_lower,
+      hits, misses, exceptions, wilson_lower, prior,
       last_seen_at, last_demerit_at,
       captured_at, session_origin, source_text, evidence_json
     ) VALUES (
       @id, @scope, @tier, @wrong, @correct, @why,
       @match_regex, @match_literals, @match_tools, @match_scope_globs,
       @embedding, @embed_model, @embed_text,
-      @hits, @misses, @exceptions, @wilson_lower,
+      @hits, @misses, @exceptions, @wilson_lower, @prior,
       @last_seen_at, @last_demerit_at,
       @captured_at, @session_origin, @source_text, @evidence_json
     )
@@ -56,7 +59,8 @@ function insertRule(db, rule) {
     hits: r.hits || 0,
     misses: r.misses || 0,
     exceptions: r.exceptions || 0,
-    wilson_lower: typeof r.wilson_lower === "number" ? r.wilson_lower : 0.5,
+    wilson_lower,
+    prior,
     last_seen_at: r.last_seen_at || null,
     last_demerit_at: r.last_demerit_at || null,
     captured_at: r.captured_at,
@@ -86,7 +90,7 @@ function updateRule(db, id, patch) {
     "tier","wrong","correct","why",
     "match_regex","match_literals","match_tools","match_scope_globs",
     "embedding","embed_model","embed_text",
-    "hits","misses","exceptions","wilson_lower",
+    "hits","misses","exceptions","wilson_lower","prior",
     "last_seen_at","last_demerit_at","source_text","evidence_json",
   ];
   const sets = [];

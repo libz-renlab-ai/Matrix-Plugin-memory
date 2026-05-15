@@ -50,4 +50,17 @@ function applyEvent(rule, evt) {
   return next;
 }
 
-module.exports = { wilsonLowerBound, decay, computeTier, applyEvent, Z, PRIOR, HALF_LIFE_DAYS };
+const PRIOR_FLOOR_N = 5;
+
+// Returns max(wilson_lower, prior) when n < PRIOR_FLOOR_N; pure Wilson thereafter.
+// Fixes M1 finding: a fresh high-prior rule shouldn't drop below its prior on
+// the first hit just because Wilson 95% CI lower bound is wide for n=1.
+function effectiveWilson(rule) {
+  const n = (rule.hits | 0) + (rule.misses | 0);
+  const wilson = typeof rule.wilson_lower === "number" ? rule.wilson_lower : PRIOR;
+  if (n >= PRIOR_FLOOR_N) return wilson;
+  const prior = typeof rule.prior === "number" ? rule.prior : PRIOR;
+  return Math.max(wilson, prior);
+}
+
+module.exports = { wilsonLowerBound, decay, computeTier, applyEvent, effectiveWilson, Z, PRIOR, HALF_LIFE_DAYS, PRIOR_FLOOR_N };
