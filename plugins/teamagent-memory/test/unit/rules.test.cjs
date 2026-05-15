@@ -1,7 +1,7 @@
 const path = require("path");
 const os = require("os");
 const { openKnowledgeDb, closeDb } = require("../../hooks/lib/db.cjs");
-const { insertRule, getRule, listRules, updateRule, archiveRule } = require("../../hooks/lib/rules.cjs");
+const { insertRule, getRule, listRules, updateRule, archiveRule, addException, listExceptions } = require("../../hooks/lib/rules.cjs");
 
 function tmpKnowDb() {
   const p = path.join(os.tmpdir(), `trk-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
@@ -81,6 +81,25 @@ describe("rules CRUD", () => {
     insertRule(db, { ...sampleRule, id: "r1" });
     insertRule(db, { ...sampleRule, id: "r2", tier: "archived" });
     expect(listRules(db, { includeArchived: true }).length).toBe(2);
+    closeDb(db);
+  });
+});
+
+describe("rule_exceptions", () => {
+  it("addException + listExceptions round-trip", () => {
+    const db = tmpKnowDb();
+    insertRule(db, sampleRule);
+    addException(db, { parent_rule_id: sampleRule.id, condition: "in test fixtures", example: "moment in __tests__/" });
+    const out = listExceptions(db, sampleRule.id);
+    expect(out.length).toBe(1);
+    expect(out[0].condition).toBe("in test fixtures");
+    closeDb(db);
+  });
+
+  it("listExceptions returns empty when none", () => {
+    const db = tmpKnowDb();
+    insertRule(db, sampleRule);
+    expect(listExceptions(db, sampleRule.id)).toEqual([]);
     closeDb(db);
   });
 });

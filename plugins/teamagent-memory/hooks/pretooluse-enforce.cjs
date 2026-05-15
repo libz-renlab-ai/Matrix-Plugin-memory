@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { resolveProjectDbPath, resolveGlobalDbPath, resolveEventsDbPath } = require("./lib/paths.cjs");
 const { openKnowledgeDb, openEventsDb, closeDb } = require("./lib/db.cjs");
-const { listRules } = require("./lib/rules.cjs");
+const { listRules, listExceptions } = require("./lib/rules.cjs");
 const { runMatch } = require("./lib/match.cjs");
 const { effectiveWilson } = require("./lib/confidence.cjs");
 const { logHook } = require("./lib/log.cjs");
@@ -69,8 +69,18 @@ async function main() {
   try { eventsDb = openEventsDb(resolveEventsDbPath()); } catch (_e) {}
 
   const rules = [];
-  if (knowledgeDb) rules.push(...listRules(knowledgeDb));
-  if (globalDb) rules.push(...listRules(globalDb));
+  if (knowledgeDb) {
+    for (const r of listRules(knowledgeDb)) {
+      try { r._exceptions = listExceptions(knowledgeDb, r.id); } catch (_e) { r._exceptions = []; }
+      rules.push(r);
+    }
+  }
+  if (globalDb) {
+    for (const r of listRules(globalDb)) {
+      try { r._exceptions = listExceptions(globalDb, r.id); } catch (_e) { r._exceptions = []; }
+      rules.push(r);
+    }
+  }
   const eligible = rules.filter(r => Array.isArray(r.match_tools) && r.match_tools.includes(toolName));
 
   const matches = await runMatch(query, eligible);

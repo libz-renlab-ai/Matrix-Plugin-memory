@@ -27,6 +27,24 @@ function _cacheSet(k, v) {
   _queryCache.set(k, v);
 }
 
+function ruleHasMatchingException(rule, query) {
+  const excs = rule._exceptions;
+  if (!Array.isArray(excs) || excs.length === 0) return false;
+  const q = (query || "").toLowerCase();
+  for (const e of excs) {
+    if (typeof e.condition !== "string" || e.condition.length === 0) continue;
+    if (q.includes(e.condition.toLowerCase())) return true;
+    // Token fallback: any condition word >2 chars present in query
+    const tokens = e.condition.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+    for (const t of tokens) if (q.includes(t)) return true;
+  }
+  return false;
+}
+
+function applyExceptionFilter(query, matches) {
+  return matches.filter(m => !ruleHasMatchingException(m.rule, query));
+}
+
 function fastPathMatch(query, rule) {
   if (typeof query !== "string" || query.length === 0) return { hit: false, sim: 0, via: null };
 
@@ -62,26 +80,27 @@ function runFastPath(query, rules, opts = {}) {
 }
 
 async function runMatch(query, rules, opts = {}) {
-  // Layer 1 — Fast-path (string / regex). Highest priority — 0ms.
-  const l1 = runFastPath(query, rules, opts);
-  if (l1.length > 0) return l1.map(h => ({ ...h, layer: 1 }));
+  // Layer 1 — Fast-path
+  const l1 = applyExceptionFilter(query, runFastPath(query, rules, opts)).map(h => ({ ...h, layer: 1 }));
+  if (l1.length > 0) return l1;
 
-  // Layer 2 — Semantic. Embed query and cosine top-K with threshold.
+  // Layer 2 — Semantic
   let queryVec = _cacheGet(query);
   if (!queryVec) {
     try { queryVec = await embedText(query); _cacheSet(query, queryVec); }
     catch (_e) { queryVec = null; }
   }
   if (queryVec) {
-    const l2 = ann.topK(queryVec, rules, TOP_K)
-      .filter(h => h.sim >= (opts.threshold || SEMANTIC_THRESHOLD))
-      .map(h => ({ ...h, via: "semantic", layer: 2 }));
+    const l2raw = ann.topK(queryVec, rules, TOP_K)
+      .filter(h => h.sim >= (opts.threshold || SEMANTIC_THRESHOLD));
+    const l2 = applyExceptionFilter(query, l2raw).map(h => ({ ...h, via: "semantic", layer: 2 }));
     if (l2.length > 0) return l2;
   }
 
-  // Layer 3 — BM25-lite, only for short queries where embedding is unreliable.
+  // Layer 3 — BM25-lite
   if (query.length < BM25_MAX_QUERY_LEN) {
-    const l3 = bm25.score(query, rules).map(h => ({ ...h, via: "bm25", layer: 3 }));
+    const l3raw = bm25.score(query, rules);
+    const l3 = applyExceptionFilter(query, l3raw).map(h => ({ ...h, via: "bm25", layer: 3 }));
     if (l3.length > 0) return l3;
   }
 
@@ -100,6 +119,8 @@ module.exports = {
   runFastPath,
   runMatch,
   runMatchSync,
+  ruleHasMatchingException,
+  applyExceptionFilter,
   FAST_PATH_BUDGET_MS,
   SEMANTIC_THRESHOLD,
   BM25_MAX_QUERY_LEN,

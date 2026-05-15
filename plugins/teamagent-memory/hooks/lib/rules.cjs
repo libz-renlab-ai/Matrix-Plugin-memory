@@ -112,4 +112,17 @@ function archiveRule(db, id) {
   db.prepare("UPDATE rules SET tier = 'archived' WHERE id = ?").run(id);
 }
 
-module.exports = { insertRule, getRule, listRules, updateRule, archiveRule };
+function addException(db, { parent_rule_id, condition, example }) {
+  const id = `exc-${parent_rule_id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  db.prepare(`
+    INSERT INTO rule_exceptions (id, parent_rule_id, condition, example, captured_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, parent_rule_id, condition, example || null, new Date().toISOString());
+  return id;
+}
+
+function listExceptions(db, parent_rule_id) {
+  return db.prepare("SELECT * FROM rule_exceptions WHERE parent_rule_id = ?").all(parent_rule_id);
+}
+
+module.exports = { insertRule, getRule, listRules, updateRule, archiveRule, addException, listExceptions };

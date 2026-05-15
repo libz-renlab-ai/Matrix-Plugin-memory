@@ -6,7 +6,7 @@ const path = require("path");
 const HOOKS_LIB = path.join(__dirname, "..", "hooks", "lib");
 const { resolveProjectDbPath, resolveGlobalDbPath, resolveEventsDbPath } = require(path.join(HOOKS_LIB, "paths.cjs"));
 const { openKnowledgeDb, openEventsDb, closeDb } = require(path.join(HOOKS_LIB, "db.cjs"));
-const { listRules, getRule, updateRule, archiveRule } = require(path.join(HOOKS_LIB, "rules.cjs"));
+const { listRules, getRule, updateRule, archiveRule, addException } = require(path.join(HOOKS_LIB, "rules.cjs"));
 const { readEvents } = require(path.join(HOOKS_LIB, "events.cjs"));
 const { applyEvent } = require(path.join(HOOKS_LIB, "confidence.cjs"));
 const { getSchemaVersion } = require(path.join(HOOKS_LIB, "schema.cjs"));
@@ -27,6 +27,8 @@ Usage:
   teamagent export [--rule id]   JSON dump
   teamagent forget --rule <id>   physical delete
   teamagent gc [--dry-run]       trigger gc
+  teamagent classify <event_id> <a|b|c> [--condition "..."]
+                                 process an override reply (a=rule-wrong, b=context-specific, c=skip)
   teamagent --version
 `);
 }
@@ -180,6 +182,48 @@ function cmdForget(args) {
   return 0;
 }
 
+function cmdClassify(args) {
+  // teamagent classify <event_id> <a|b|c> [--condition "..."]
+  const [eventIdStr, choice, ...rest] = args;
+  if (!eventIdStr || !choice) { console.error("classify: need <event_id> <a|b|c>"); return 2; }
+  let condition = null;
+  for (let i = 0; i < rest.length; i++) if (rest[i] === "--condition") condition = rest[++i];
+
+  let ev = null;
+  try { ev = openEventsDb(resolveEventsDbPath()); } catch (_e) { console.error("cannot open events.db"); return 1; }
+  const event = ev.prepare("SELECT * FROM events WHERE id = ?").get(parseInt(eventIdStr, 10));
+  if (!event || event.kind !== "override_detected") {
+    console.error("classify: event not found or not an override_detected");
+    closeDb(ev); return 1;
+  }
+  const ruleId = event.rule_id;
+  const dbs = bothDbs();
+  const found = findRule(dbs, ruleId);
+  if (!found) { console.error("classify: rule not found: " + ruleId); closeDb(ev); closeAll(dbs); return 1; }
+
+  if (choice === "a") {
+    const next = applyEvent(found.rule, { kind: "miss", at: new Date().toISOString() });
+    updateRule(found.db, ruleId, { misses: next.misses, wilson_lower: next.wilson_lower, last_demerit_at: next.last_demerit_at, tier: next.tier });
+    ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
+      .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "rule_wrong" }));
+    console.log(`classified as rule-wrong; demoted to tier=${next.tier} wilson=${next.wilson_lower.toFixed(2)}`);
+  } else if (choice === "b") {
+    if (!condition) { console.error("classify b: --condition required"); closeDb(ev); closeAll(dbs); return 2; }
+    addException(found.db, { parent_rule_id: ruleId, condition, example: null });
+    ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
+      .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "context_specific", condition }));
+    console.log(`classified as context-specific; exception saved: "${condition}"`);
+  } else if (choice === "c") {
+    ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
+      .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "skip" }));
+    console.log(`classified as skip (no change to rule)`);
+  } else {
+    console.error("classify: choice must be a/b/c"); closeDb(ev); closeAll(dbs); return 2;
+  }
+  closeDb(ev); closeAll(dbs);
+  return 0;
+}
+
 function cmdGc(args) {
   const dryRun = args.includes("--dry-run");
   const dbs = bothDbs();
@@ -214,6 +258,7 @@ function main(argv) {
     case "export": return cmdExport(rest);
     case "forget": return cmdForget(rest);
     case "gc": return cmdGc(rest);
+    case "classify": return cmdClassify(rest);
     case undefined:
     case "":
     case "-h":
