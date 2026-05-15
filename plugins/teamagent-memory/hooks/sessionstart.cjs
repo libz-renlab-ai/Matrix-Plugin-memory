@@ -6,6 +6,7 @@ const { resolveProjectDbPath, resolveGlobalDbPath, resolveEventsDbPath } = requi
 const { openKnowledgeDb, openEventsDb, closeDb } = require("./lib/db.cjs");
 const { logHook } = require("./lib/log.cjs");
 const { decay } = require("./lib/confidence.cjs");
+const { embedText, packEmbedding, MODEL_ID } = require("./lib/embed.cjs");
 
 function readStdinSync() { try { return fs.readFileSync(0, "utf8"); } catch (_e) { return ""; } }
 function safeParse(s) { try { return JSON.parse(s); } catch (_e) { return null; } }
@@ -14,6 +15,28 @@ function gcStaleExperimental(db, cutoffIso) {
   try {
     db.prepare(`UPDATE rules SET tier='archived' WHERE tier='experimental' AND hits=0 AND captured_at < ?`).run(cutoffIso);
   } catch (_e) {}
+}
+
+async function backfillEmbeddings(db) {
+  if (!db) return 0;
+  try {
+    const rows = db.prepare(`
+      SELECT id, embed_text FROM rules
+      WHERE embedding IS NULL AND tier != 'archived'
+      LIMIT 50
+    `).all();
+    if (rows.length === 0) return 0;
+    const stmt = db.prepare("UPDATE rules SET embedding = ?, embed_model = ? WHERE id = ?");
+    let touched = 0;
+    for (const r of rows) {
+      try {
+        const v = await embedText(r.embed_text);
+        stmt.run(packEmbedding(v), MODEL_ID, r.id);
+        touched++;
+      } catch (_e) { /* skip; retried next session */ }
+    }
+    return touched;
+  } catch (_e) { return 0; }
 }
 
 function applyDecay(db, seenCutoffIso) {
@@ -37,7 +60,7 @@ function applyDecay(db, seenCutoffIso) {
   } catch (_e) { return 0; }
 }
 
-function main() {
+async function main() {
   const event = safeParse(readStdinSync()) || {};
   const session_id = event.session_id || (event.session && event.session.id) || null;
 
@@ -56,17 +79,23 @@ function main() {
     decayedTotal += applyDecay(db, seenCutoff);
   }
 
+  // Backfill embeddings for any rules without one (capped per session)
+  let backfilled = 0;
+  for (const db of [knowledgeDb, globalDb].filter(Boolean)) {
+    backfilled += await backfillEmbeddings(db);
+  }
+
   logHook(eventsDb, "SessionStart", {
     kind: "session_start",
     session_id,
-    payload: { decayed: decayedTotal },
+    payload: { decayed: decayedTotal, backfilled },
   });
 
   for (const db of [knowledgeDb, globalDb, eventsDb]) closeDb(db);
   process.exit(0);
 }
 
-try { main(); } catch (err) {
+main().catch(err => {
   try { process.stderr.write("teamagent sessionstart error: " + (err && err.message) + "\n"); } catch (_e) {}
   process.exit(0);
-}
+});

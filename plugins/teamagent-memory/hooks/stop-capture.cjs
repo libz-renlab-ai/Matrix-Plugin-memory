@@ -9,6 +9,7 @@ const { findCandidates } = require("./lib/analyze.cjs");
 const { runExtract, dedupHash } = require("./lib/extract.cjs");
 const { applyEvent } = require("./lib/confidence.cjs");
 const { lintRegex } = require("./lib/redos.cjs");
+const { embedText, packEmbedding, MODEL_ID } = require("./lib/embed.cjs");
 const { logHook } = require("./lib/log.cjs");
 const { readEvents } = require("./lib/events.cjs");
 
@@ -70,7 +71,7 @@ async function processCandidate(cand, ctx) {
   const wrongSlug = slug(extracted.wrong);
   const correctSlug = slug(extracted.correct);
   const id = `rule-${isoDate()}-${wrongSlug}-${correctSlug}`;
-  const embedText = `${extracted.wrong}. ${extracted.correct}. ${extracted.why}`.trim();
+  const embedTextStr = `${extracted.wrong}. ${extracted.correct}. ${extracted.why}`.trim();
 
   const existing = getRule(db, id);
   if (existing) {
@@ -83,6 +84,16 @@ async function processCandidate(cand, ctx) {
   const hint = typeof extracted.confidence_hint === "number" ? extracted.confidence_hint : 0.5;
   const prior = hint >= 0.9 ? 0.6 : (hint >= 0.7 ? 0.55 : 0.5);
 
+  // Embed the rule text now so PreToolUse semantic layer can match it.
+  let embeddingBuf = null, embedModelTag = null;
+  try {
+    const vec = await embedText(embedTextStr);
+    embeddingBuf = packEmbedding(vec);
+    embedModelTag = MODEL_ID;
+  } catch (_e) {
+    logHook(eventsDb, "Stop", { kind: "rule_embed_failed", rule_id: id, session_id });
+  }
+
   insertRule(db, {
     id, scope, tier: "experimental",
     wrong: extracted.wrong, correct: extracted.correct, why: extracted.why,
@@ -90,9 +101,10 @@ async function processCandidate(cand, ctx) {
     match_literals: Array.isArray(extracted.match_literals) ? extracted.match_literals.slice(0, 8) : null,
     match_tools: Array.isArray(extracted.match_tools) && extracted.match_tools.length ? extracted.match_tools : ["Bash"],
     match_scope_globs: null,
-    embedding: null, embed_model: null,
-    embed_text: embedText,
-    hits: 0, misses: 0, exceptions: 0, wilson_lower: prior,
+    embedding: embeddingBuf,
+    embed_model: embedModelTag,
+    embed_text: embedTextStr,
+    hits: 0, misses: 0, exceptions: 0, wilson_lower: prior, prior,
     last_seen_at: null, last_demerit_at: null,
     captured_at: nowIso(),
     session_origin: session_id,
