@@ -1,127 +1,114 @@
 #!/usr/bin/env node
-// teamagent-memory: PreToolUse enforcer.
-// Reads stdin (Claude Code hook event), iterates rule cards from
-// ~/.teamagent/rules.jsonl, and if any rule's trigger matches the Bash
-// command, emits a deny decision JSON. Logs every check to events.jsonl.
-
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
+const { resolveProjectDbPath, resolveGlobalDbPath, resolveEventsDbPath } = require("./lib/paths.cjs");
+const { openKnowledgeDb, openEventsDb, closeDb } = require("./lib/db.cjs");
+const { listRules } = require("./lib/rules.cjs");
+const { runMatch } = require("./lib/match.cjs");
+const { logHook } = require("./lib/log.cjs");
 
-const HOME = process.env.HOME || os.homedir();
-const STORE_DIR = path.join(HOME, ".teamagent");
-const RULES_PATH = path.join(STORE_DIR, "rules.jsonl");
-const EVENTS_PATH = path.join(STORE_DIR, "events.jsonl");
+const THRESH = { block: 0.85, warn: 0.65, suggest: 0.45, passive: 0.25 };
 
-function readStdinSync() {
-  try {
-    return fs.readFileSync(0, "utf8");
-  } catch (_e) {
-    return "";
+function readStdinSync() { try { return fs.readFileSync(0, "utf8"); } catch (_e) { return ""; } }
+function safeParse(s) { try { return JSON.parse(s); } catch (_e) { return null; } }
+
+function extractQuery(toolName, input) {
+  if (!input || typeof input !== "object") return "";
+  if (toolName === "Bash") return typeof input.command === "string" ? input.command : "";
+  if (toolName === "Edit") {
+    const ns = typeof input.new_string === "string" ? input.new_string.slice(0, 200) : "";
+    const fp = typeof input.file_path === "string" ? path.basename(input.file_path) : "";
+    return ns ? ns + " :: " + fp : "";
   }
-}
-
-function safeParseJSON(s) {
-  try {
-    return JSON.parse(s);
-  } catch (_e) {
-    return null;
+  if (toolName === "Write") {
+    const c = typeof input.content === "string" ? input.content.slice(0, 500) : "";
+    const fp = typeof input.file_path === "string" ? path.basename(input.file_path) : "";
+    return c ? c + " :: " + fp : "";
   }
+  return "";
 }
 
-function loadRules() {
-  if (!fs.existsSync(RULES_PATH)) return [];
-  const raw = fs.readFileSync(RULES_PATH, "utf8");
-  const rules = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t) continue;
-    const obj = safeParseJSON(t);
-    if (obj && obj.trigger && obj.trigger.pattern) rules.push(obj);
-  }
-  return rules;
+function decisionFor(score) {
+  if (score >= THRESH.block) return "block";
+  if (score >= THRESH.warn) return "warn";
+  if (score >= THRESH.suggest) return "suggest";
+  if (score >= THRESH.passive) return "passive";
+  return "pass";
 }
 
-function ensureStoreDir() {
-  try {
-    fs.mkdirSync(STORE_DIR, { recursive: true });
-  } catch (_e) { /* ignore */ }
-}
-
-function logEvent(evt) {
-  try {
-    ensureStoreDir();
-    fs.appendFileSync(EVENTS_PATH, JSON.stringify(evt) + "\n");
-  } catch (_e) { /* ignore */ }
-}
-
-const MAX_PATTERN_LEN = 512; // bound regex compile + ReDoS exposure
-
-function matchRule(rule, command) {
-  const pat = rule.trigger && rule.trigger.pattern;
-  if (!pat || typeof command !== "string") return false;
-  if (typeof pat !== "string" || pat.length > MAX_PATTERN_LEN) return false;
-  try {
-    const re = new RegExp(pat, "i");
-    if (re.test(command)) return true;
-  } catch (_e) { /* not a valid regex, fall through */ }
-  return command.toLowerCase().includes(pat.toLowerCase());
+function buildReason(rule, decision, sim, wilson, score) {
+  const lines = [
+    `TeamAgent rule ${rule.id} ${decision === "warn" ? "blocks this (warn-tier)" : decision === "block" ? "blocks this" : "suggests a change"}.`,
+    `- wrong:   ${rule.wrong}`,
+    `- correct: ${rule.correct}`,
+    `- why:     ${rule.why}`,
+    `- score:   ${score.toFixed(2)} (sim=${sim.toFixed(2)}, wilson=${wilson.toFixed(2)}, tier=${rule.tier})`,
+    `- hits/misses: ${rule.hits}/${rule.misses}; last_seen ${rule.last_seen_at || "never"}`,
+  ];
+  if (decision === "warn") lines.push("If this is a false positive: > /mute-rule " + rule.id);
+  if (decision === "suggest") lines.push("Suggestion only — you can proceed.");
+  return lines.join("\n");
 }
 
 function main() {
-  const raw = readStdinSync();
-  const event = safeParseJSON(raw) || {};
-  const toolName = event.tool_name || (event.tool && event.tool.name);
-  const toolInput = event.tool_input || (event.tool && event.tool.input) || {};
-  const command = toolInput.command || "";
+  const ev = safeParse(readStdinSync()) || {};
+  const toolName = ev.tool_name || (ev.tool && ev.tool.name);
+  const toolInput = ev.tool_input || (ev.tool && ev.tool.input) || {};
+  const session_id = ev.session_id || null;
 
-  if (toolName !== "Bash" || !command) {
-    process.exit(0);
+  if (!["Bash", "Edit", "Write"].includes(toolName)) { process.exit(0); }
+  const query = extractQuery(toolName, toolInput);
+  if (!query) { process.exit(0); }
+
+  let knowledgeDb = null, globalDb = null, eventsDb = null;
+  try { knowledgeDb = openKnowledgeDb(resolveProjectDbPath()); } catch (_e) {}
+  try { globalDb = openKnowledgeDb(resolveGlobalDbPath()); } catch (_e) {}
+  try { eventsDb = openEventsDb(resolveEventsDbPath()); } catch (_e) {}
+
+  const rules = [];
+  if (knowledgeDb) rules.push(...listRules(knowledgeDb));
+  if (globalDb) rules.push(...listRules(globalDb));
+  const eligible = rules.filter(r => Array.isArray(r.match_tools) && r.match_tools.includes(toolName));
+
+  const matches = runMatch(query, eligible);
+  let best = null;
+  for (const m of matches) {
+    const sim = m.sim;
+    const wilson = typeof m.rule.wilson_lower === "number" ? m.rule.wilson_lower : 0.5;
+    const score = sim * wilson;
+    if (!best || score > best.score) best = { rule: m.rule, sim, wilson, score };
   }
 
-  const rules = loadRules();
-  for (const rule of rules) {
-    if (matchRule(rule, command)) {
-      const reason =
-        "TeamAgent rule " + (rule.id || "<no-id>") + " blocks this command. " +
-        "Wrong: " + (rule.wrong || "(unspecified)") + ". " +
-        "Correct: " + (rule.correct || "(unspecified)") + ". " +
-        "Why: " + (rule.why || "(unspecified)") + ".";
+  const decision = best ? decisionFor(best.score) : "pass";
 
-      logEvent({
-        ts: new Date().toISOString(),
-        kind: "pretooluse_block",
-        rule_id: rule.id || null,
-        command: command,
-        decision: "deny",
-      });
-
-      const out = {
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      };
-      process.stdout.write(JSON.stringify(out));
-      process.exit(0);
-    }
-  }
-
-  logEvent({
-    ts: new Date().toISOString(),
-    kind: "pretooluse_pass",
-    command: command,
+  logHook(eventsDb, "PreToolUse", {
+    kind: "pretooluse_" + decision,
+    session_id,
+    rule_id: best ? best.rule.id : null,
+    tool_name: toolName,
+    decision,
+    score: best ? best.score : 0,
+    payload: { command: query.slice(0, 500) },
   });
+
+  for (const db of [knowledgeDb, globalDb, eventsDb]) closeDb(db);
+
+  if (decision === "pass" || decision === "passive") { process.exit(0); }
+
+  const out = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: decision === "suggest" ? "ask" : "deny",
+      permissionDecisionReason: buildReason(best.rule, decision, best.sim, best.wilson, best.score),
+    },
+  };
+  process.stdout.write(JSON.stringify(out));
   process.exit(0);
 }
 
-try {
-  main();
-} catch (err) {
-  // Never break the user's session; log to stderr and exit 0.
-  try { process.stderr.write("teamagent-memory pretooluse error: " + (err && err.message) + "\n"); } catch (_e) {}
+try { main(); } catch (err) {
+  try { process.stderr.write("teamagent pretooluse error: " + (err && err.message) + "\n"); } catch (_e) {}
   process.exit(0);
 }

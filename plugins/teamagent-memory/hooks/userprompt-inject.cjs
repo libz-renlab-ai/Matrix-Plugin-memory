@@ -1,82 +1,59 @@
 #!/usr/bin/env node
-// teamagent-memory: UserPromptSubmit injector.
-// Scans the user prompt for keywords matching any rule trigger pattern and
-// emits an additionalContext block listing relevant rules so the assistant
-// is reminded before it acts.
-
 "use strict";
 
 const fs = require("fs");
-const path = require("path");
-const os = require("os");
+const { resolveProjectDbPath, resolveGlobalDbPath, resolveEventsDbPath } = require("./lib/paths.cjs");
+const { openKnowledgeDb, openEventsDb, closeDb } = require("./lib/db.cjs");
+const { listRules } = require("./lib/rules.cjs");
+const { runMatch } = require("./lib/match.cjs");
+const { logHook } = require("./lib/log.cjs");
 
-const HOME = process.env.HOME || os.homedir();
-const STORE_DIR = path.join(HOME, ".teamagent");
-const RULES_PATH = path.join(STORE_DIR, "rules.jsonl");
+const MAX_INJECT = 5;
 
-function readStdinSync() {
-  try { return fs.readFileSync(0, "utf8"); } catch (_e) { return ""; }
-}
-function safeParseJSON(s) { try { return JSON.parse(s); } catch (_e) { return null; } }
+function readStdinSync() { try { return fs.readFileSync(0, "utf8"); } catch (_e) { return ""; } }
+function safeParse(s) { try { return JSON.parse(s); } catch (_e) { return null; } }
 
-function loadRules() {
-  if (!fs.existsSync(RULES_PATH)) return [];
-  const out = [];
-  const raw = fs.readFileSync(RULES_PATH, "utf8");
-  for (const line of raw.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t) continue;
-    const obj = safeParseJSON(t);
-    if (obj && obj.trigger && obj.trigger.pattern) out.push(obj);
+function extractPrompt(ev) {
+  if (typeof ev.prompt === "string") return ev.prompt;
+  if (typeof ev.user_prompt === "string") return ev.user_prompt;
+  if (ev.message && typeof ev.message.content === "string") return ev.message.content;
+  if (ev.message && Array.isArray(ev.message.content)) {
+    return ev.message.content.map(c => (typeof c === "string" ? c : (c && c.text) || "")).join("\n");
   }
-  return out;
-}
-
-function keywordsFromPattern(pat) {
-  // Strip regex metas to recover plain keyword tokens for substring matching.
-  const cleaned = String(pat).replace(/\\s\+|\\s\*|\\s|\\\.|\\\$|\\\^|\\\(|\\\)|\\\[|\\\]|\\\{|\\\}|\\\||\\\+|\\\*|\\\?|\\\\/g, " ");
-  return cleaned.split(/[^a-zA-Z0-9_@.\/-]+/).map((s) => s.trim()).filter((s) => s.length > 2);
-}
-
-function matches(text, rule) {
-  const pat = rule.trigger && rule.trigger.pattern;
-  if (!pat) return false;
-  try {
-    const re = new RegExp(pat, "i");
-    if (re.test(text)) return true;
-  } catch (_e) {}
-  const lower = text.toLowerCase();
-  for (const kw of keywordsFromPattern(pat)) {
-    if (lower.includes(kw.toLowerCase())) return true;
-  }
-  return false;
+  return "";
 }
 
 function main() {
-  const raw = readStdinSync();
-  const event = safeParseJSON(raw) || {};
-  const prompt = event.prompt || event.user_prompt || (event.message && event.message.content) || "";
-  const text = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+  const ev = safeParse(readStdinSync()) || {};
+  const session_id = ev.session_id || null;
+  const prompt = extractPrompt(ev);
+  if (!prompt) { process.exit(0); }
 
-  if (!text) process.exit(0);
+  let knowledgeDb = null, globalDb = null, eventsDb = null;
+  try { knowledgeDb = openKnowledgeDb(resolveProjectDbPath()); } catch (_e) {}
+  try { globalDb = openKnowledgeDb(resolveGlobalDbPath()); } catch (_e) {}
+  try { eventsDb = openEventsDb(resolveEventsDbPath()); } catch (_e) {}
 
-  const rules = loadRules();
-  const hits = [];
-  for (const rule of rules) {
-    if (matches(text, rule)) hits.push(rule);
-  }
-  if (hits.length === 0) process.exit(0);
+  const rules = [];
+  if (knowledgeDb) rules.push(...listRules(knowledgeDb));
+  if (globalDb) rules.push(...listRules(globalDb));
+
+  const hits = runMatch(prompt, rules);
+  logHook(eventsDb, "UserPromptSubmit", {
+    kind: "prompt_match",
+    session_id,
+    payload: { hit_count: hits.length, rule_ids: hits.map(h => h.rule.id) },
+  });
+
+  for (const db of [knowledgeDb, globalDb, eventsDb]) closeDb(db);
+
+  if (hits.length === 0) { process.exit(0); }
 
   const lines = ["TeamAgent rule reminder (do not repeat past mistakes):"];
-  for (const r of hits.slice(0, 5)) {
-    lines.push(
-      "- [" + (r.id || "<no-id>") + "] wrong: " + (r.wrong || "?") +
-      " | correct: " + (r.correct || "?") +
-      " | why: " + (r.why || "?") +
-      " | confidence: " + (r.confidence || 1)
-    );
+  for (const h of hits.slice(0, MAX_INJECT)) {
+    const r = h.rule;
+    lines.push(`- [${r.id}] wrong: ${r.wrong} | correct: ${r.correct} | why: ${r.why} | tier: ${r.tier} (wilson ${r.wilson_lower.toFixed(2)})`);
   }
-
   const out = {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
@@ -88,6 +65,6 @@ function main() {
 }
 
 try { main(); } catch (err) {
-  try { process.stderr.write("teamagent-memory userprompt-inject error: " + (err && err.message) + "\n"); } catch (_e) {}
+  try { process.stderr.write("teamagent userprompt-inject error: " + (err && err.message) + "\n"); } catch (_e) {}
   process.exit(0);
 }

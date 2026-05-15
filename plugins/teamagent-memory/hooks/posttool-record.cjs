@@ -1,0 +1,42 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const { resolveEventsDbPath } = require("./lib/paths.cjs");
+const { openEventsDb, closeDb } = require("./lib/db.cjs");
+const { logHook } = require("./lib/log.cjs");
+
+function readStdinSync() { try { return fs.readFileSync(0, "utf8"); } catch (_e) { return ""; } }
+function safeParse(s) { try { return JSON.parse(s); } catch (_e) { return null; } }
+
+function main() {
+  const ev = safeParse(readStdinSync()) || {};
+  const session_id = ev.session_id || null;
+  const tool_name = ev.tool_name || (ev.tool && ev.tool.name) || null;
+  const resp = ev.tool_response || ev.toolResult || {};
+  const exit_code = typeof resp.exit_code === "number" ? resp.exit_code : (typeof resp.exitCode === "number" ? resp.exitCode : null);
+  const stderr = typeof resp.stderr === "string" ? resp.stderr.slice(0, 500) : null;
+
+  let eventsDb = null;
+  try { eventsDb = openEventsDb(resolveEventsDbPath()); } catch (_e) {}
+
+  const kind = exit_code === 0 || exit_code === null ? "posttool_ok" : "posttool_fail";
+  logHook(eventsDb, "PostToolUse", {
+    kind,
+    session_id,
+    tool_name,
+    payload: {
+      exit_code,
+      stderr_excerpt: stderr,
+      command: ev.tool_input && typeof ev.tool_input.command === "string" ? ev.tool_input.command.slice(0, 500) : null,
+    },
+  });
+
+  closeDb(eventsDb);
+  process.exit(0);
+}
+
+try { main(); } catch (err) {
+  try { process.stderr.write("teamagent posttool error: " + (err && err.message) + "\n"); } catch (_e) {}
+  process.exit(0);
+}
