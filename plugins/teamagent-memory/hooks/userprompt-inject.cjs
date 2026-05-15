@@ -9,21 +9,66 @@ const { runMatch } = require("./lib/match.cjs");
 const { readEvents } = require("./lib/events.cjs");
 const { logHook } = require("./lib/log.cjs");
 
-function findUnhandledOverride(eventsDb, session_id) {
+const AUTO_CLASSIFY_AFTER = 3;
+
+// Returns the next unhandled override_detected event (oldest first), or null.
+// Also auto-classifies as (a) rule-wrong any override that's been surfaced
+// >= AUTO_CLASSIFY_AFTER times without being classified — per DESIGN §8.3.
+function findUnhandledOverride(eventsDb, session_id, dbs) {
   if (!eventsDb || !session_id) return null;
   try {
-    const rows = readEvents(eventsDb, { session_id, limit: 50 });
+    const rows = readEvents(eventsDb, { session_id, limit: 200 });
     const handled = new Set();
+    const promptCount = new Map(); // rule_id -> count of override_prompt_injected
     for (const r of rows) {
       if (r.kind === "override_classified" && r.rule_id) handled.add(r.rule_id);
-    }
-    for (const r of rows) {
-      if (r.kind === "override_detected" && r.rule_id && !handled.has(r.rule_id)) {
-        return r;
+      if (r.kind === "override_prompt_injected" && r.rule_id) {
+        promptCount.set(r.rule_id, (promptCount.get(r.rule_id) || 0) + 1);
       }
+    }
+    // Scan oldest-first to find the earliest unhandled override.
+    const detected = rows.filter(r => r.kind === "override_detected" && r.rule_id && !handled.has(r.rule_id));
+    detected.sort((a, b) => a.id - b.id); // ascending = oldest first
+    for (const r of detected) {
+      const seen = promptCount.get(r.rule_id) || 0;
+      if (seen >= AUTO_CLASSIFY_AFTER) {
+        // Auto-classify as (a) rule-wrong.
+        autoClassifyRuleWrong(eventsDb, dbs, r);
+        handled.add(r.rule_id);
+        continue;
+      }
+      return r;
     }
   } catch (_e) {}
   return null;
+}
+
+function autoClassifyRuleWrong(eventsDb, dbs, overrideEvent) {
+  try {
+    const { applyEvent } = require("./lib/confidence.cjs");
+    const ruleId = overrideEvent.rule_id;
+    const found = (dbs && dbs.findRule) ? dbs.findRule(ruleId) : null;
+    if (found && found.rule) {
+      const next = applyEvent(found.rule, { kind: "miss", at: new Date().toISOString() });
+      const { updateRule } = require("./lib/rules.cjs");
+      updateRule(found.db, ruleId, {
+        misses: next.misses,
+        wilson_lower: next.wilson_lower,
+        last_demerit_at: next.last_demerit_at,
+        tier: next.tier,
+      });
+    }
+    eventsDb.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`).run(
+      new Date().toISOString(),
+      overrideEvent.rule_id,
+      JSON.stringify({ classification: "rule_wrong", auto: true, reason: "no_reply_after_" + AUTO_CLASSIFY_AFTER + "_prompts" }),
+    );
+    eventsDb.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_auto_classified', ?, ?)`).run(
+      new Date().toISOString(),
+      overrideEvent.rule_id,
+      JSON.stringify({ source_event_id: overrideEvent.id }),
+    );
+  } catch (_e) {}
 }
 
 const MAX_INJECT = 5;
@@ -52,9 +97,20 @@ async function main() {
   try { globalDb = openKnowledgeDb(resolveGlobalDbPath()); } catch (_e) {}
   try { eventsDb = openEventsDb(resolveEventsDbPath()); } catch (_e) {}
 
+  // For auto-classify path we need to mutate rules by id — provide a tiny resolver.
+  const findRuleAcrossDbs = (id) => {
+    for (const db of [knowledgeDb, globalDb].filter(Boolean)) {
+      try {
+        const r = db.prepare("SELECT * FROM rules WHERE id = ?").get(id);
+        if (r) return { db, rule: r };
+      } catch (_e) {}
+    }
+    return null;
+  };
+
   // If there's an unhandled override from this session, surface the
   // 3-option reply prompt first (don't compete with normal rule reminders).
-  const override = findUnhandledOverride(eventsDb, session_id);
+  const override = findUnhandledOverride(eventsDb, session_id, { findRule: findRuleAcrossDbs });
   if (override) {
     const lines = [
       `TeamAgent noticed you bypassed rule ${override.rule_id}. Was that:`,
@@ -81,15 +137,19 @@ async function main() {
     process.exit(0);
   }
 
+  // Project wins on id collision (ADR-0012).
+  const seen = new Set();
   const rules = [];
   if (knowledgeDb) {
     for (const r of listRules(knowledgeDb)) {
       try { r._exceptions = listExceptions(knowledgeDb, r.id); } catch (_e) { r._exceptions = []; }
+      seen.add(r.id);
       rules.push(r);
     }
   }
   if (globalDb) {
     for (const r of listRules(globalDb)) {
+      if (seen.has(r.id)) continue;
       try { r._exceptions = listExceptions(globalDb, r.id); } catch (_e) { r._exceptions = []; }
       rules.push(r);
     }

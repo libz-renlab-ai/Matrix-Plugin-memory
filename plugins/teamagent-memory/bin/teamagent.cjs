@@ -11,7 +11,7 @@ const { readEvents } = require(path.join(HOOKS_LIB, "events.cjs"));
 const { applyEvent } = require(path.join(HOOKS_LIB, "confidence.cjs"));
 const { getSchemaVersion } = require(path.join(HOOKS_LIB, "schema.cjs"));
 
-const VERSION = "0.2.0-alpha.1";
+const VERSION = "0.2.0";
 
 function usage() {
   console.log(`teamagent — TeamAgent memory store CLI (v${VERSION})
@@ -29,6 +29,8 @@ Usage:
   teamagent gc [--dry-run]       trigger gc
   teamagent classify <event_id> <a|b|c> [--condition "..."]
                                  process an override reply (a=rule-wrong, b=context-specific, c=skip)
+  teamagent compile [--repo PATH] [--dry-run]
+                                 (re)write the managed TeamAgent block in <repo>/AGENTS.md
   teamagent --version
 `);
 }
@@ -209,10 +211,21 @@ function cmdClassify(args) {
     console.log(`classified as rule-wrong; demoted to tier=${next.tier} wilson=${next.wilson_lower.toFixed(2)}`);
   } else if (choice === "b") {
     if (!condition) { console.error("classify b: --condition required"); closeDb(ev); closeAll(dbs); return 2; }
-    addException(found.db, { parent_rule_id: ruleId, condition, example: null });
-    ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
-      .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "context_specific", condition }));
-    console.log(`classified as context-specific; exception saved: "${condition}"`);
+    // Embed the condition synchronously-style (await in async wrapper).
+    return (async () => {
+      let embedding = null;
+      try {
+        const { embedText, packEmbedding } = require(path.join(HOOKS_LIB, "embed.cjs"));
+        const vec = await embedText(condition);
+        embedding = packEmbedding(vec);
+      } catch (_e) { /* fall through with embedding=null; literal substring still works */ }
+      addException(found.db, { parent_rule_id: ruleId, condition, example: null, embedding });
+      ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
+        .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "context_specific", condition, embedded: !!embedding }));
+      console.log(`classified as context-specific; exception saved: "${condition}"${embedding ? " (embedded)" : ""}`);
+      closeDb(ev); closeAll(dbs);
+      return 0;
+    })();
   } else if (choice === "c") {
     ev.prepare(`INSERT INTO events (ts, kind, rule_id, payload_json) VALUES (?, 'override_classified', ?, ?)`)
       .run(new Date().toISOString(), ruleId, JSON.stringify({ classification: "skip" }));
@@ -221,6 +234,35 @@ function cmdClassify(args) {
     console.error("classify: choice must be a/b/c"); closeDb(ev); closeAll(dbs); return 2;
   }
   closeDb(ev); closeAll(dbs);
+  return 0;
+}
+
+function cmdCompile(args) {
+  let repo = null;
+  let dryRun = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--repo") repo = args[++i];
+    else if (args[i] === "--dry-run") dryRun = true;
+  }
+  repo = repo || process.env.TEAMAGENT_REPO_ROOT || process.cwd();
+  let knowledgeDb = null;
+  try { knowledgeDb = openKnowledgeDb(resolveProjectDbPath()); } catch (e) { console.error("cannot open knowledge.db: " + e.message); return 1; }
+  const { listRules: listProjectRules } = require(path.join(HOOKS_LIB, "rules.cjs"));
+  const { compileFromDb, pickRules, renderBlock } = require(path.join(HOOKS_LIB, "compile.cjs"));
+  if (dryRun) {
+    const all = listProjectRules(knowledgeDb, { scope: "project", limit: 1000 });
+    const picks = pickRules(all);
+    process.stdout.write(renderBlock(picks) + "\n");
+    closeDb(knowledgeDb);
+    return 0;
+  }
+  const res = compileFromDb(knowledgeDb, repo);
+  closeDb(knowledgeDb);
+  if (res.skipped) {
+    console.error("skipped: " + res.skipped);
+    return 1;
+  }
+  console.log(`${res.changed ? "updated" : "unchanged"} ${res.path} (${res.ruleCount} rules)`);
   return 0;
 }
 
@@ -259,6 +301,7 @@ function main(argv) {
     case "forget": return cmdForget(rest);
     case "gc": return cmdGc(rest);
     case "classify": return cmdClassify(rest);
+    case "compile": return cmdCompile(rest);
     case undefined:
     case "":
     case "-h":
@@ -270,4 +313,7 @@ function main(argv) {
   }
 }
 
-process.exit(main(process.argv.slice(2)));
+Promise.resolve(main(process.argv.slice(2))).then(code => process.exit(code || 0)).catch(err => {
+  console.error(err && err.message ? err.message : err);
+  process.exit(1);
+});

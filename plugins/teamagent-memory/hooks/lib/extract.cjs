@@ -69,6 +69,28 @@ function spawnWithTimeout(cmd, args, { stdin, env, timeoutMs }) {
   });
 }
 
+// Strip a single leading ```json (or ```) / trailing ``` if the model wrapped
+// its response in markdown code fences. Returns the raw inner text.
+function stripFences(text) {
+  let t = String(text || "").trim();
+  // ```json\n...\n``` or ```\n...\n```
+  const m = t.match(/^```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```$/);
+  if (m) return m[1].trim();
+  return t;
+}
+
+// Parse the model's assistant text into a JSON object. Tries several
+// strategies — raw parse, fence strip, then first {...} regex.
+function tryParseRule(text) {
+  if (!text) return null;
+  const stripped = stripFences(text);
+  try { return JSON.parse(stripped); } catch (_e) {}
+  // last-resort: first balanced-looking object in the text
+  const m = stripped.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch (_e2) {} }
+  return null;
+}
+
 async function runExtract(contextTurns, opts = {}) {
   const claudeBin = opts.claudeBin || ["claude"];
   const env = opts.env || {};
@@ -77,13 +99,13 @@ async function runExtract(contextTurns, opts = {}) {
 
   const prompt = buildExtractPrompt(contextTurns);
   const baseArgs = claudeBin.slice(1);
-  // For real claude, append the proper flags. For test stubs (node fake-claude.cjs)
-  // we still pass them — the fake binary ignores them.
+  // --output-format text gives just the assistant's final text (no stream wrapper).
+  // For test stubs (node fake-claude.cjs) we still pass these flags — they're ignored.
   const args = [
     ...baseArgs,
     "-p",
     "--model", model,
-    "--output-format", "json",
+    "--output-format", "text",
     "--max-turns", "1",
     "--disallowed-tools", "*",
   ];
@@ -93,15 +115,10 @@ async function runExtract(contextTurns, opts = {}) {
     attempts++;
     const res = await spawnWithTimeout(claudeBin[0], args, { stdin: prompt, env, timeoutMs });
     if (res.timedOut || res.code !== 0) return null;
-    const text = (res.stdout || "").trim();
-    let parsed = null;
-    try { parsed = JSON.parse(text); } catch (_e) {
-      const m = text.match(/\{[\s\S]*\}/);
-      if (m) { try { parsed = JSON.parse(m[0]); } catch (_e2) { parsed = null; } }
-    }
+    const parsed = tryParseRule(res.stdout);
     if (parsed && typeof parsed.is_actionable_rule === "boolean") return parsed;
   }
   return null;
 }
 
-module.exports = { runExtract, dedupHash, buildExtractPrompt };
+module.exports = { runExtract, dedupHash, buildExtractPrompt, stripFences, tryParseRule };

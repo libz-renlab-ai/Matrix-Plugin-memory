@@ -1,6 +1,6 @@
 # INSTALL
 
-How to install and run `teamagent-memory` v0.2.0-rc.1 locally.
+How to install and run `teamagent-memory` v0.2.0 locally.
 
 ## Prerequisites
 

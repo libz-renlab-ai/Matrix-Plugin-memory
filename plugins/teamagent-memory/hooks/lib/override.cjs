@@ -65,12 +65,13 @@ ${userReply}
 
 If the reply doesn't describe a real exception context (just venting / ambiguous), return:
 { "condition": null }`;
+  const { tryParseRule } = require("./extract.cjs");
   return new Promise((resolve) => {
     const args = [
       ...claudeBin.slice(1),
       "-p",
       "--model", model,
-      "--output-format", "json",
+      "--output-format", "text",
       "--max-turns", "1",
       "--disallowed-tools", "*",
     ];
@@ -85,12 +86,7 @@ If the reply doesn't describe a real exception context (just venting / ambiguous
     child.on("close", code => {
       clearTimeout(timer);
       if (code !== 0) return finish(null);
-      const text = stdout.trim();
-      let parsed = null;
-      try { parsed = JSON.parse(text); } catch (_e) {
-        const m = text.match(/\{[\s\S]*\}/);
-        if (m) { try { parsed = JSON.parse(m[0]); } catch (_e2) {} }
-      }
+      const parsed = tryParseRule(stdout);
       if (parsed && typeof parsed.condition === "string" && parsed.condition.length > 0 && parsed.condition.length < 200) {
         return finish(parsed);
       }

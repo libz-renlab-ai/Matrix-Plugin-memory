@@ -12,6 +12,7 @@ const { lintRegex } = require("./lib/redos.cjs");
 const { embedText, packEmbedding, MODEL_ID } = require("./lib/embed.cjs");
 const { logHook } = require("./lib/log.cjs");
 const { readEvents } = require("./lib/events.cjs");
+const { compileFromDb } = require("./lib/compile.cjs");
 
 const STOP_BUDGET_MS = 25000;
 
@@ -148,6 +149,33 @@ async function main() {
       break;
     }
     await processCandidate(cand, { transcript_path, knowledgeDb, globalDb, eventsDb, session_id, claudeBin: claudeBinSpec, env: process.env });
+  }
+
+  // Stage 4 — compile high-tier project rules to <repo>/AGENTS.md.
+  // Best-effort: failures here never block Stop.
+  try {
+    if (knowledgeDb && process.env.TEAMAGENT_REPO_ROOT) {
+      const repoRoot = process.env.TEAMAGENT_REPO_ROOT;
+      const res = compileFromDb(knowledgeDb, repoRoot);
+      logHook(eventsDb, "Stop", {
+        kind: "stop_compile",
+        session_id,
+        payload: { path: res.path, rule_count: res.ruleCount, changed: !!res.changed, skipped: res.skipped || null },
+      });
+    } else if (knowledgeDb) {
+      // No env override — try the CWD (Claude Code typically runs hooks from the repo root).
+      const repoRoot = process.cwd();
+      if (repoRoot) {
+        const res = compileFromDb(knowledgeDb, repoRoot);
+        logHook(eventsDb, "Stop", {
+          kind: "stop_compile",
+          session_id,
+          payload: { path: res.path, rule_count: res.ruleCount, changed: !!res.changed, skipped: res.skipped || null },
+        });
+      }
+    }
+  } catch (err) {
+    logHook(eventsDb, "Stop", { kind: "stop_compile_error", session_id, payload: { message: err && err.message } });
   }
 
   for (const db of [knowledgeDb, globalDb, eventsDb]) closeDb(db);
